@@ -1,0 +1,6 @@
+KubeWeasel is installed in {{ .Release.Namespace }}.
+Access the dashboard through an authenticated Kubernetes port-forward:
+
+  kubectl -n {{ .Release.Namespace }} port-forward deployment/{{ .Release.Name }} 7878:7878
+
+Open http://127.0.0.1:7878
