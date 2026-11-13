@@ -1,6 +1,40 @@
-use super::*;
-use k8s_openapi::api::{core::v1::PersistentVolumeClaim, storage::v1::StorageClass};
+#[cfg(test)]
+use crate::{
+    applications::{
+        self,
+        models::{Deploy, Scale},
+    },
+    projects, settings,
+};
+use crate::{
+    error::{Error, Result, invalid},
+    http::request::mutation,
+    state::AppState,
+    validation::valid_name,
+    workloads::{self, managed},
+};
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+    routing::{get, post},
+};
+use k8s_openapi::api::{
+    core::v1::{PersistentVolumeClaim, Pod},
+    storage::v1::StorageClass,
+};
+use kube::{
+    Api, ResourceExt,
+    api::{ListParams, Patch, PatchParams, PostParams},
+};
+#[cfg(test)]
+use kube::{Client, api::LogParams};
 use rand_core::{OsRng, RngCore};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::{collections::BTreeMap, sync::Arc};
+use tokio::sync::RwLock;
+
 #[derive(Clone, Default)]
 pub struct StorageState {
     pub gate: Arc<tokio::sync::Mutex<()>>,
@@ -441,16 +475,16 @@ mod live_tests {
             .await
             .unwrap();
         let result: std::result::Result<(), Box<dyn std::error::Error>> = async {
- let s=AppState{client:Some(client.clone()),namespace:ns.clone(),apps:Arc::new(RwLock::new(BTreeMap::new())),settings:settings::SettingsState::default(),storage:StorageState::default(),projects:projects::Store::open(":memory:")?};let mut headers=HeaderMap::new();headers.insert("x-kubeweasel-request","dashboard".parse().unwrap());let _=crate::deploy(State(s.clone()),headers.clone(),Json(Deploy{workload_kind:kind.into(),project_id:None,name:"storage-check".into(),image:"busybox:1.37".into(),port:8080,replicas:0})).await.map_err(|e|e.1)?;
+ let s=AppState{client:Some(client.clone()),namespace:ns.clone(),apps:Arc::new(RwLock::new(BTreeMap::new())),settings:settings::SettingsState::default(),storage:StorageState::default(),projects:projects::Store::open(":memory:")?};let mut headers=HeaderMap::new();headers.insert("x-kubeweasel-request","dashboard".parse().unwrap());applications::service::deploy(&s, Deploy{workload_kind:kind.into(),project_id:None,name:"storage-check".into(),image:"busybox:1.37".into(),port:8080,replicas:0}).await.map_err(|e|e.1)?;
  let workload=managed(&s,"storage-check").await.map_err(|e|e.1)?;workload.patch("storage-check",&PatchParams::default(),&Patch::Strategic(json!({"spec":{"template":{"spec":{"terminationGracePeriodSeconds":1,"containers":[{"name":"app","command":["sh","-c","echo kubeweasel-persistent-data > /data/probe; cat /data/probe; sleep 3600"]}]}}}}))).await.map_err(|e|e.1)?;
  let _=attach(State(s.clone()),Path("storage-check".into()),headers.clone(),Json(Mount{claim_name:"test-data".into(),mount_path:"/data".into(),create_new:true,size_gib:1,storage_class:String::new()})).await.map_err(|e|e.1)?;
- if crate::scale(State(s.clone()),Path("storage-check".into()),headers.clone(),Json(Scale{replicas:2})).await.is_ok(){return Err("Unsafe stateful scaling was allowed".into());}
- let _=crate::scale(State(s.clone()),Path("storage-check".into()),headers.clone(),Json(Scale{replicas:1})).await.map_err(|e|e.1)?;let pods:Api<Pod>=Api::namespaced(client.clone(),&ns);let first=ready_pod(&pods,None).await?;
+ if applications::service::scale(&s, "storage-check", Scale{replicas:2}).await.is_ok(){return Err("Unsafe stateful scaling was allowed".into());}
+ applications::service::scale(&s, "storage-check", Scale{replicas:1}).await.map_err(|e|e.1)?;let pods:Api<Pod>=Api::namespaced(client.clone(),&ns);let first=ready_pod(&pods,None).await?;
  assert_data(&pods,&first.name_any()).await?;
  workload.patch("storage-check",&PatchParams::default(),&Patch::Strategic(json!({"spec":{"template":{"spec":{"containers":[{"name":"app","command":["sh","-c","cat /data/probe; sleep 3600"]}]}}}}))).await.map_err(|e|e.1)?;let next=ready_pod(&pods,first.metadata.uid.as_deref()).await?;assert_data(&pods,&next.name_any()).await?;
  let config=serde_json::to_value(settings::load(&s,"storage-check").await.map_err(|e|e.1)?)?;if config["workload_kind"]!=kind||config["max_replicas"]!=1{return Err("Stateful configuration readback failed".into());}
- let _=crate::scale(State(s.clone()),Path("storage-check".into()),headers.clone(),Json(Scale{replicas:0})).await.map_err(|e|e.1)?;let storage=inspect(State(s.clone()),Path("storage-check".into())).await.map_err(|e|e.1)?.0;let volume=storage["mounts"][0]["volume_name"].as_str().unwrap().to_string();let _=detach(State(s.clone()),Path("storage-check".into()),headers.clone(),Json(Detach{volume_name:volume})).await.map_err(|e|e.1)?;let claims:Api<PersistentVolumeClaim>=Api::namespaced(client.clone(),&ns);let retained=claims.get("test-data").await?;if retained.metadata.owner_references.is_some(){return Err("Claim must be retained independently".into());}
- let _=attach(State(s.clone()),Path("storage-check".into()),headers.clone(),Json(Mount{claim_name:"test-data".into(),mount_path:"/data".into(),create_new:false,size_gib:0,storage_class:String::new()})).await.map_err(|e|e.1)?;let _=crate::scale(State(s.clone()),Path("storage-check".into()),headers.clone(),Json(Scale{replicas:1})).await.map_err(|e|e.1)?;let restored=ready_pod(&pods,next.metadata.uid.as_deref()).await?;assert_data(&pods,&restored.name_any()).await?;Ok(())
+ applications::service::scale(&s, "storage-check", Scale{replicas:0}).await.map_err(|e|e.1)?;let storage=inspect(State(s.clone()),Path("storage-check".into())).await.map_err(|e|e.1)?.0;let volume=storage["mounts"][0]["volume_name"].as_str().unwrap().to_string();let _=detach(State(s.clone()),Path("storage-check".into()),headers.clone(),Json(Detach{volume_name:volume})).await.map_err(|e|e.1)?;let claims:Api<PersistentVolumeClaim>=Api::namespaced(client.clone(),&ns);let retained=claims.get("test-data").await?;if retained.metadata.owner_references.is_some(){return Err("Claim must be retained independently".into());}
+ let _=attach(State(s.clone()),Path("storage-check".into()),headers.clone(),Json(Mount{claim_name:"test-data".into(),mount_path:"/data".into(),create_new:false,size_gib:0,storage_class:String::new()})).await.map_err(|e|e.1)?;applications::service::scale(&s, "storage-check", Scale{replicas:1}).await.map_err(|e|e.1)?;let restored=ready_pod(&pods,next.metadata.uid.as_deref()).await?;assert_data(&pods,&restored.name_any()).await?;Ok(())
  }.await;
         namespaces
             .delete(&ns, &DeleteParams::default())

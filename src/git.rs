@@ -1,9 +1,40 @@
 //! Public Git / Dockerfile builds. Jobs and workload annotations survive dashboard restarts.
-use super::*;
+use crate::{
+    applications::{self, models::Deploy},
+    error::{Error, Result, invalid},
+    http::request::mutation,
+    state::AppState,
+    validation::{valid_name, validate},
+    workloads::{self, LABEL, managed},
+};
+#[cfg(test)]
+use crate::{projects, settings, storage};
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+    routing::{get, post},
+};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use k8s_openapi::api::{batch::v1::Job, core::v1::Secret};
+use k8s_openapi::api::{
+    batch::v1::Job,
+    core::v1::{Pod, Secret},
+};
+#[cfg(test)]
+use kube::Client;
+use kube::{
+    Api, ResourceExt,
+    api::{ListParams, LogParams, Patch, PatchParams, PostParams},
+};
 use rand_core::RngCore;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+#[cfg(test)]
+use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::Mutex;
+#[cfg(test)]
+use tokio::sync::RwLock;
+
 pub(crate) static GATE: Mutex<()> = Mutex::const_new(());
 const SOURCE: &str = "kubeweasel.io/git-source";
 const BUILD: &str = "kubeweasel.io/build-job";
@@ -276,17 +307,16 @@ async fn start(
             port: input.port,
             replicas: 0,
         })?;
-        let _ = crate::deploy(
-            State(s.clone()),
-            headers,
-            Json(Deploy {
+        applications::service::deploy(
+            s,
+            Deploy {
                 workload_kind: "Deployment".into(),
                 project_id: input.project_id,
                 name: name.into(),
                 image: image.clone(),
                 port: input.port,
                 replicas: 0,
-            }),
+            },
         )
         .await?;
     }
@@ -589,7 +619,7 @@ mod live_tests {
         let result:std::result::Result<(),Box<dyn std::error::Error>>=async {
             let s=AppState{client:Some(client.clone()),namespace:ns.clone(),apps:Arc::new(RwLock::new(BTreeMap::new())),settings:settings::SettingsState::default(),storage:storage::StorageState::default(),projects:projects::Store::open(":memory:")?};
             let mut headers=HeaderMap::new();headers.insert("x-kubeweasel-request","dashboard".parse()?);
-            let _=crate::deploy(State(s.clone()),headers,Json(Deploy{workload_kind:"Deployment".into(),project_id:None,name:"git-check".into(),image:"busybox:1.36".into(),port:8080,replicas:0})).await.map_err(|e|e.1)?;
+            applications::service::deploy(&s, Deploy{workload_kind:"Deployment".into(),project_id:None,name:"git-check".into(),image:"busybox:1.36".into(),port:8080,replicas:0}).await.map_err(|e|e.1)?;
             let workload=managed(&s,"git-check").await.map_err(|e|e.1)?;
             workload.patch("git-check",&PatchParams::default(),&Patch::Strategic(json!({"spec":{"template":{"spec":{"terminationGracePeriodSeconds":1,"containers":[{"name":"app","command":["sh","-c","sleep 3600"]}]}}}}))).await.map_err(|e|e.1)?;
             let source=Source{repository:"https://github.com/docker/welcome-to-docker.git".into(),branch:"main".into(),dockerfile:"Dockerfile".into(),registry:"dockerhub".into(),image_repository:"docker.io/library/busybox".into(),credential_secret:"test-registry".into()};

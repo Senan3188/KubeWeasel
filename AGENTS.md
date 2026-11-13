@@ -6,7 +6,13 @@ These instructions apply throughout this repository.
 
 - `src/projects.rs`: project-folder persistence, assignment labels, and empty-folder deletion rules.
 - `src/auth.rs`: single-owner setup, SQLite-backed sessions, password hashing, request protection, and login rate limits.
-- `src/main.rs`: Axum server, embedded dashboard assets, deployment listing/creation, scaling, restarts, and logs.
+- `src/main.rs`: minimal executable entry point; delegates to the library's `run` function.
+- `src/lib.rs`, `src/server.rs`: module boundaries and startup orchestration (authentication, state, workers, listener, shutdown).
+- `src/config.rs`, `src/health.rs`: environment/CLI configuration and side-effect-free health-check execution.
+- `src/state.rs`: shared application state initialization and demo seeding.
+- `src/applications/`: application models, HTTP route adapters, shared business services, and typed Kubernetes resource factories.
+- `src/http/`: complete router composition, embedded static assets, and mutation-header validation; authentication wraps every feature API.
+- `src/error.rs`, `src/validation.rs`: shared API errors and pure resource/deployment validation.
 - `src/workloads.rs`: Deployment/StatefulSet operations, ownership checks, version preconditions, and single-replica storage guards.
 - `src/storage.rs`: standalone retained PVCs, mount validation, claim-sharing checks, and explicit detach without deleting data.
 - `src/git.rs`: public Git/Dockerfile builds, retained registry credentials, bounded rootless build Jobs, and restart-safe promotion.
@@ -34,6 +40,8 @@ These instructions apply throughout this repository.
 
 ## Implementation rules
 
+- Keep dependencies explicit: no file-level `use super::*` or shared root-module prelude. Test modules may import their parent. Keep startup and asset wiring out of feature services.
+- Keep application HTTP adapters thin. Internal features call `applications::service` operations directly, without Axum extractors, request headers, or JSON response wrappers. Resource factories construct typed Kubernetes objects without API calls; services coordinate effects.
 - Never delete PVCs or data during detach, scale, or workload updates. Keep storage-backed apps and StatefulSets single-replica; use Recreate for storage-backed Deployments and retain PVCs independently.
 - Keep projects as organizational folders; store assignment in `kubeweasel.io/project`, preserve project IDs on rename, and reject deletion of non-empty folders. Moving apps must not restart pods or change namespaces.
 - Keep demo and live behavior explicit. Never silently substitute sample data for cluster errors.
@@ -67,6 +75,7 @@ These instructions apply throughout this repository.
 ## Verification
 
 - Run `cargo fmt --check`, `cargo test --locked`, and `cargo clippy --locked --all-targets -- -D warnings`.
+- After changing router composition or application services, keep the full-router tests passing: anonymous API rejection, Host/CSRF checks, embedded asset access, and authenticated deploy/scale/source-change flows. Verify `--healthcheck` without opening account storage or Kubernetes configuration.
 - Run `node --check` for every `dashboard/*.js` file after frontend changes, including authentication and project navigation.
 - For UI changes, inspect the running dashboard, app navigation, forms, error states, and responsive layout in a browser.
 - For chart changes, run `helm lint charts/kubeweasel` and render the chart with `ingressClassDiscovery` and `nodeMonitoring` enabled and disabled, plus a configured HTTPS `publicOrigin`. Verify account-volume mounts and the optional Service.

@@ -1,7 +1,36 @@
-use super::*;
+use crate::{
+    applications::{self, models::Deploy},
+    error::{Error, Result, invalid},
+    git,
+    http::request::mutation,
+    state::AppState,
+    validation::validate,
+    workloads::{self, managed},
+};
+#[cfg(test)]
+use crate::{projects, settings, storage};
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+    routing::post,
+};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use k8s_openapi::api::core::v1::{LocalObjectReference, Secret};
+use k8s_openapi::api::core::v1::Secret;
+use kube::{
+    Api,
+    api::{Patch, PatchParams, PostParams},
+};
+#[cfg(test)]
+use kube::{Client, ResourceExt};
 use rand_core::{OsRng, RngCore};
+use serde::Deserialize;
+use serde_json::{Value, json};
+#[cfg(test)]
+use std::{collections::BTreeMap, sync::Arc};
+#[cfg(test)]
+use tokio::sync::RwLock;
+
 #[derive(Deserialize)]
 struct ImageInput {
     #[serde(flatten)]
@@ -123,8 +152,9 @@ async fn create(
         }
     }
     let credential = secret.clone();
-    let result = crate::deploy_with_pull_secret(s, headers, input.deploy, secret).await;
-    result.map_err(|e|if credential.is_some(){Error(e.0,format!("{}. Image-pull credentials were saved as a retained Kubernetes Secret; inspect the application before retrying.",e.1))}else{e})
+    let result = applications::service::deploy_with_pull_secret(&s, input.deploy, secret).await;
+    result.map_err(|e|if credential.is_some(){Error(e.0,format!("{}. Image-pull credentials were saved as a retained Kubernetes Secret; inspect the application before retrying.",e.1))}else{e})?;
+    Ok(Json(json!({"ok":true})))
 }
 #[derive(Deserialize)]
 struct UpdateInput {
@@ -199,16 +229,6 @@ async fn update(
     }
     Ok(Json(json!({"ok":true})))
 }
-pub fn set_pull_secret(deployment: &mut Deployment, secret: Option<String>) {
-    if let Some(name) = secret
-        && let Some(pod) = deployment
-            .spec
-            .as_mut()
-            .and_then(|s| s.template.spec.as_mut())
-    {
-        pod.image_pull_secrets = Some(vec![LocalObjectReference { name }]);
-    }
-}
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/apps/image", post(create))
@@ -231,25 +251,6 @@ mod tests {
         assert!(image_reference("custom", "owner/app").is_err());
         assert!(image_reference("custom", "registry.example.com:5000/app:tag").is_ok());
         assert!(image_reference("custom", "https://registry.example.com/app").is_err());
-    }
-    #[test]
-    fn credentials_attached_before_workload_creation() {
-        let mut d: Deployment = serde_json::from_value(
-            json!({"spec":{"selector":{},"template":{"spec":{"containers":[{"name":"app"}]}}}}),
-        )
-        .unwrap();
-        set_pull_secret(&mut d, Some("pull-test".into()));
-        assert_eq!(
-            d.spec
-                .unwrap()
-                .template
-                .spec
-                .unwrap()
-                .image_pull_secrets
-                .unwrap()[0]
-                .name,
-            "pull-test"
-        );
     }
 }
 
@@ -284,7 +285,7 @@ mod live_tests {
         let result:std::result::Result<(),Box<dyn std::error::Error>>=async {
             let s=AppState{client:Some(client),namespace:ns.clone(),apps:Arc::new(RwLock::new(BTreeMap::new())),settings:settings::SettingsState::default(),storage:storage::StorageState::default(),projects:projects::Store::open(":memory:")?};
             let mut headers=HeaderMap::new();headers.insert("x-kubeweasel-request","dashboard".parse()?);
-            let _=crate::deploy(State(s.clone()),headers.clone(),Json(Deploy{workload_kind:"Deployment".into(),project_id:None,name:"source-check".into(),image:"nginx:stable".into(),port:8080,replicas:0})).await.map_err(|e|e.1)?;
+            applications::service::deploy(&s, Deploy{workload_kind:"Deployment".into(),project_id:None,name:"source-check".into(),image:"nginx:stable".into(),port:8080,replicas:0}).await.map_err(|e|e.1)?;
             let w=managed(&s,"source-check").await.map_err(|e|e.1)?;
             w.patch("source-check",&PatchParams::default(),&Patch::Strategic(json!({"metadata":{"annotations":{"kubeweasel.io/git-source":"{}","kubeweasel.io/build-job":"old-build","kubeweasel.io/build-status":"Building"}},"spec":{"template":{"spec":{"volumes":[{"name":"keep","emptyDir":{}}],"containers":[{"name":"app","env":[{"name":"KEEP","value":"yes"}],"volumeMounts":[{"name":"keep","mountPath":"/keep"}]}]}}}}))).await.map_err(|e|e.1)?;
             let _=update(State(s),Path("source-check".into()),headers,Json(UpdateInput{image:"library/nginx:alpine".into(),registry:"dockerhub".into(),username:String::new(),token:String::new()})).await.map_err(|e|e.1)?;

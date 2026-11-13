@@ -1,18 +1,33 @@
-use super::*;
+use crate::{
+    error::{Error, Result, invalid},
+    http::request::mutation,
+    state::AppState,
+};
+#[cfg(test)]
+use crate::{projects, settings, storage};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use axum::{
-    extract::{ConnectInfo, Request},
+    Json, Router,
+    extract::{ConnectInfo, Request, State},
+    http::{HeaderMap, StatusCode},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
+    routing::{get, post},
 };
 use rand_core::{OsRng, RngCore};
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::Deserialize;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     net::SocketAddr,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
+#[cfg(test)]
+use tokio::sync::RwLock;
+
 const LIFETIME: i64 = 12 * 60 * 60;
 const IDLE: i64 = 30 * 60;
 #[derive(Clone)]
@@ -454,6 +469,13 @@ async fn logout_all(State(s): State<AuthState>) -> Result<Response> {
 }
 
 #[cfg(test)]
+pub(crate) fn test_state() -> AuthState {
+    let state = AuthState::open(":memory:", "127.0.0.1:7878", None).unwrap();
+    *state.setup_hash.lock().unwrap() = Some(digest("test-setup-token"));
+    state
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use axum::{
@@ -462,9 +484,7 @@ mod tests {
     };
     use tower::ServiceExt;
     fn state() -> AuthState {
-        let s = AuthState::open(":memory:", "127.0.0.1:7878", None).unwrap();
-        *s.setup_hash.lock().unwrap() = Some(digest("test-setup-token"));
-        s
+        super::test_state()
     }
     fn router(s: AuthState) -> Router {
         let app = AppState {

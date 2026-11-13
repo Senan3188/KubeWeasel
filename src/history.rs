@@ -1,6 +1,37 @@
 //! Bounded workload-local image history. No environment values or Secret contents.
-use super::*;
+#[cfg(test)]
+use crate::{
+    applications::{self, models::Deploy},
+    projects, settings, storage,
+};
+use crate::{
+    error::{Result, invalid},
+    git,
+    http::request::mutation,
+    state::AppState,
+    workloads::{self, LABEL, managed},
+};
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::HeaderMap,
+    routing::{get, post},
+};
+use k8s_openapi::api::core::v1::Pod;
+use kube::{
+    Api, ResourceExt,
+    api::{ListParams, Patch, PatchParams},
+};
+#[cfg(test)]
+use kube::{Client, api::PostParams};
 use rand_core::{OsRng, RngCore};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+#[cfg(test)]
+use std::{collections::BTreeMap, sync::Arc};
+#[cfg(test)]
+use tokio::sync::RwLock;
+
 const KEY: &str = "kubeweasel.io/deployment-history";
 const MARK: &str = "kubeweasel.io/deployment-id";
 #[derive(Clone, Serialize, Deserialize)]
@@ -502,7 +533,7 @@ mod live_tests {
             .unwrap();
         let result:std::result::Result<(),Box<dyn std::error::Error>>=async{
    let s=AppState{client:Some(client.clone()),namespace:ns.clone(),apps:Arc::new(RwLock::new(BTreeMap::new())),settings:settings::SettingsState::default(),storage:storage::StorageState::default(),projects:projects::Store::open(":memory:")?};let mut headers=HeaderMap::new();headers.insert("x-kubeweasel-request","dashboard".parse()?);
-   let _=crate::deploy(State(s.clone()),headers.clone(),Json(Deploy{workload_kind:"Deployment".into(),project_id:None,name:"history-check".into(),image:"nginx:alpine".into(),port:80,replicas:1})).await.map_err(|e|e.1)?;
+   applications::service::deploy(&s, Deploy{workload_kind:"Deployment".into(),project_id:None,name:"history-check".into(),image:"nginx:alpine".into(),port:80,replicas:1}).await.map_err(|e|e.1)?;
    let pvc:PersistentVolumeClaim=serde_json::from_value(json!({"apiVersion":"v1","kind":"PersistentVolumeClaim","metadata":{"name":"keep-data"},"spec":{"accessModes":["ReadWriteOnce"],"resources":{"requests":{"storage":"1Gi"}}}}))?;let claims:Api<PersistentVolumeClaim>=Api::namespaced(client.clone(),&ns);let original_claim=claims.create(&PostParams::default(),&pvc).await?;
    let w=managed(&s,"history-check").await.map_err(|e|e.1)?;
    w.patch("history-check",&PatchParams::default(),&Patch::Strategic(json!({"spec":{"strategy":{"type":"Recreate","rollingUpdate":null},"template":{"spec":{"terminationGracePeriodSeconds":1,"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"keep-data"}}],"containers":[{"name":"app","env":[{"name":"KEEP","value":"yes"}],"volumeMounts":[{"name":"data","mountPath":"/saved"}]}]}}}}))).await.map_err(|e|e.1)?;

@@ -1,7 +1,30 @@
-use super::*;
+#[cfg(test)]
+use crate::{
+    applications::{self, models::Deploy},
+    settings, storage,
+};
+use crate::{
+    error::{Error, Result, invalid},
+    http::request::mutation,
+    state::AppState,
+    workloads::{self, LABEL, managed},
+};
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+    routing::{get, post},
+};
+use kube::api::{Patch, PatchParams};
 use rand_core::{OsRng, RngCore};
 use rusqlite::{Connection, OptionalExtension, params};
-use std::sync::Mutex;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+#[cfg(test)]
+use tokio::sync::RwLock;
 
 pub const PROJECT_LABEL: &str = "kubeweasel.io/project";
 #[derive(Clone)]
@@ -326,17 +349,16 @@ mod lifecycle_tests {
         .unwrap()
         .0;
         let id = project["project"]["id"].as_str().unwrap().to_string();
-        let _ = crate::deploy(
-            State(s.clone()),
-            headers.clone(),
-            Json(Deploy {
+        applications::service::deploy(
+            &s,
+            Deploy {
                 workload_kind: String::new(),
                 project_id: Some(id.clone()),
                 name: "test-app".into(),
                 image: "nginx:stable".into(),
                 port: 80,
                 replicas: 1,
-            }),
+            },
         )
         .await
         .unwrap();

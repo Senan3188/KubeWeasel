@@ -1,7 +1,34 @@
-use super::*;
-use kube::api::{ApiResource, DynamicObject, GroupVersionKind};
+#[cfg(test)]
+use crate::{
+    applications::{self, models::Deploy},
+    projects, storage,
+};
+use crate::{
+    error::{Result, invalid},
+    settings,
+    state::AppState,
+    validation::valid_name,
+};
+#[cfg(test)]
+use axum::http::HeaderMap;
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    routing::get,
+};
+use kube::{
+    Api, Client,
+    api::{ApiResource, DynamicObject, GroupVersionKind, ListParams},
+};
 use rand_core::{OsRng, RngCore};
+use serde_json::{Value, json};
 use settings::Domain;
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use tokio::sync::RwLock;
+
 const ISSUER: &str = "cert-manager.io/issuer";
 const CLUSTER_ISSUER: &str = "cert-manager.io/cluster-issuer";
 pub fn routes() -> Router<AppState> {
@@ -402,7 +429,7 @@ mod live_tests {
    let issuer_api=api(client.clone(),&ns,"Issuer");let issuer:DynamicObject=serde_json::from_value(json!({"apiVersion":"cert-manager.io/v1","kind":"Issuer","metadata":{"name":"local-selfsigned"},"spec":{"selfSigned":{}}})).unwrap();issuer_api.create(&PostParams::default(),&issuer).await?;
    for attempt in 0..60{if ready(&json_object(issuer_api.get("local-selfsigned").await?)){break;}
    if attempt==59{return Err("Test issuer did not become ready".into());}tokio::time::sleep(std::time::Duration::from_secs(1)).await;}
-   let s=AppState{client:Some(client.clone()),namespace:ns.clone(),apps:Arc::new(RwLock::new(BTreeMap::new())),settings:settings::SettingsState::default(),storage:storage::StorageState::default(),projects:projects::Store::open(":memory:")?};let mut headers=HeaderMap::new();headers.insert("x-kubeweasel-request","dashboard".parse().unwrap());let _=crate::deploy(State(s.clone()),headers.clone(),Json(Deploy{workload_kind:String::new(),project_id:None,name:"https-check".into(),image:"nginx:stable".into(),port:80,replicas:0})).await.map_err(|e|e.1)?;
+   let s=AppState{client:Some(client.clone()),namespace:ns.clone(),apps:Arc::new(RwLock::new(BTreeMap::new())),settings:settings::SettingsState::default(),storage:storage::StorageState::default(),projects:projects::Store::open(":memory:")?};let mut headers=HeaderMap::new();headers.insert("x-kubeweasel-request","dashboard".parse().unwrap());applications::service::deploy(&s, Deploy{workload_kind:String::new(),project_id:None,name:"https-check".into(),image:"nginx:stable".into(),port:80,replicas:0}).await.map_err(|e|e.1)?;
    let mut d=Domain{host:"https-check.test".into(),path:"/".into(),ingress_class:"traefik".into(),tls_mode:"automatic".into(),issuer:"local-selfsigned".into(),issuer_kind:"Issuer".into(),..Default::default()};let _=settings::domain(State(s.clone()),Path("https-check".into()),headers.clone(),Json(d.clone())).await.map_err(|e|e.1)?;
    let loaded=settings::load(&s,"https-check").await.map_err(|e|e.1)?;if mode(&loaded.domain)!="automatic"||loaded.domain.issuer!="local-selfsigned"{return Err("Automatic HTTPS settings did not survive readback".into());}
    for attempt in 0..90{let result=inspect(&s,&loaded.domain).await;if result["state"]=="ready"{break;}

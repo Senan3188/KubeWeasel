@@ -103,7 +103,17 @@ cargo clippy --locked --all-targets -- -D warnings
 node --check dashboard/dashboard.js
 ```
 
-`src/main.rs` contains the API and Kubernetes operations; `dashboard/` contains the embedded UI; `charts/kubeweasel/` contains the installation chart.
+`src/main.rs` only starts the application. The Rust library separates responsibilities:
+
+- `server.rs`, `config.rs`, and `health.rs`: startup, runtime configuration, and health-check execution.
+- `state.rs`: shared state and demo initialization.
+- `http/`: route composition, authentication coverage, embedded assets, and request guards.
+- `applications/`: models, thin HTTP adapters, application services, and typed Kubernetes resource construction.
+- Feature modules (`auth`, `projects`, `settings`, `git`, `registry`, `storage`, `history`, `https`, `monitoring`, `diagnostics`): their respective capabilities, with explicit imports.
+- `workloads.rs`: shared Kubernetes ownership checks, updates, and concurrency/storage guards.
+- `error.rs` and `validation.rs`: common errors and pure validation.
+
+`dashboard/` contains the embedded UI; `charts/kubeweasel/` contains the installation chart. Internal callers use services directly; they do not call HTTP handlers. The complete router is tested for protected APIs, asset delivery, and authenticated deployment/source-change flows.
 
 ## Application configuration
 

@@ -1,5 +1,22 @@
-use super::*;
-use kube::api::{ApiResource, DynamicObject, GroupVersionKind};
+pub(crate) const LABEL: &str = "app.kubernetes.io/managed-by=kubeweasel";
+use crate::{
+    error::{Error, Result, invalid},
+    history,
+    state::AppState,
+    storage,
+};
+use axum::http::StatusCode;
+use k8s_openapi::api::apps::v1::Deployment;
+use kube::{
+    Api, Client, ResourceExt,
+    api::{
+        ApiResource, DynamicObject, GroupVersionKind, ListParams, Patch, PatchParams, PostParams,
+    },
+};
+use serde::Serialize;
+use serde_json::{Value, json};
+use std::{collections::BTreeMap, sync::Arc};
+
 #[derive(Clone)]
 pub struct Managed {
     api: Api<DynamicObject>,
