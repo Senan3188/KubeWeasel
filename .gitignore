@@ -8,3 +8,7 @@
 kubeconfig
 kubeconfig.*
 __pycache__/
+*.db
+*.db-shm
+*.db-wal
+/data/

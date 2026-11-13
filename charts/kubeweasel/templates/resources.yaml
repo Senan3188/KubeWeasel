@@ -17,6 +17,9 @@ rules:
   - apiGroups: [""]
     resources: [pods, pods/log]
     verbs: [get, list]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: [pods]
+    verbs: [get, list]
   - apiGroups: ["networking.k8s.io"]
     resources: [ingresses]
     verbs: [get, create, patch, delete]
@@ -43,6 +46,8 @@ metadata:
   name: {{ .Release.Name }}
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: {{ .Release.Name }}
@@ -62,11 +67,20 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: KUBEWEASEL_BIND
-              value: "127.0.0.1:7878"
+              value: {{ if .Values.publicOrigin }}"0.0.0.0:7878"{{ else }}"127.0.0.1:7878"{{ end }}
+            - name: KUBEWEASEL_AUTH_DB
+              value: "/data/kubeweasel.db"
+            {{- if .Values.publicOrigin }}
+            - name: KUBEWEASEL_PUBLIC_ORIGIN
+              value: {{ .Values.publicOrigin | quote }}
+            {{- end }}
             - name: KUBEWEASEL_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+          volumeMounts:
+            - name: auth-data
+              mountPath: /data
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -79,4 +93,7 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
----
+      volumes:
+        - name: auth-data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-data

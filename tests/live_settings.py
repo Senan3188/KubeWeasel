@@ -7,14 +7,16 @@ import sys
 import urllib.error
 import urllib.request
 
+from auth_client import auth_headers
 base, namespace = sys.argv[1:]
+headers = auth_headers(base)
 name = 'kw-settings-check'
 created = False
 
 def api(path, body=None, expected=200):
     req = urllib.request.Request(base + '/api/apps/' + path,
         data=None if body is None else json.dumps(body).encode(),
-        headers={'content-type': 'application/json', 'x-kubeweasel-request': 'dashboard'})
+        headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
             status, data = response.status, json.load(response)
@@ -30,7 +32,7 @@ try:
     # Create through the dashboard's existing deployment API.
     req = urllib.request.Request(base + '/api/apps',
         data=json.dumps({'name':name,'image':'nginx:stable','port':80,'replicas':1}).encode(),
-        headers={'content-type':'application/json','x-kubeweasel-request':'dashboard'})
+        headers=headers)
     with urllib.request.urlopen(req, timeout=30):
         created = True
     api(name+'/general', {'image':'nginx:stable','replicas':1})

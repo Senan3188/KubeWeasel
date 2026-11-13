@@ -5,10 +5,12 @@ import json
 import sys
 import urllib.request
 
+from auth_client import auth_headers
 base, name, port = sys.argv[1:]
+headers = auth_headers(base)
 from urllib.parse import quote
 endpoint = base + '/api/apps/' + quote(name, safe='') + '/networking'
-with urllib.request.urlopen(endpoint + '/diagnostics', timeout=15) as response:
+with urllib.request.urlopen(urllib.request.Request(endpoint + '/diagnostics', headers=headers), timeout=15) as response:
     diagnostics = json.load(response)
 assert not diagnostics['demo']
 assert diagnostics['host']
@@ -17,7 +19,7 @@ assert checks['controller']['state'] == 'pass', checks['controller']
 assert checks['route']['state'] == 'pass', checks['route']
 request = urllib.request.Request(endpoint + '/test',
     data=json.dumps({'port': int(port), 'local': True}).encode(),
-    headers={'content-type': 'application/json', 'x-kubeweasel-request': 'dashboard'})
+    headers=headers)
 with urllib.request.urlopen(request, timeout=15) as response:
     result = json.load(response)
 assert result['state'] == 'pass', result

@@ -1,4 +1,7 @@
+mod auth;
 mod diagnostics;
+mod monitoring;
+mod projects;
 mod settings;
 use axum::{
     Json, Router,
@@ -27,6 +30,7 @@ struct AppState {
     namespace: String,
     apps: Arc<RwLock<BTreeMap<String, App>>>,
     settings: settings::SettingsState,
+    projects: projects::Store,
 }
 #[derive(Clone, Serialize)]
 struct App {
@@ -35,9 +39,12 @@ struct App {
     replicas: i32,
     ready: i32,
     status: String,
+    project_id: Option<String>,
 }
 #[derive(Deserialize)]
 struct Deploy {
+    #[serde(default)]
+    project_id: Option<String>,
     name: String,
     image: String,
     port: u16,
@@ -47,6 +54,7 @@ struct Deploy {
 struct Scale {
     replicas: i32,
 }
+#[derive(Debug)]
 struct Error(StatusCode, String);
 impl IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
@@ -116,6 +124,7 @@ async fn overview(State(s): State<AppState>) -> Result<Json<Value>> {
                     .and_then(|c| c.image.clone())
                     .unwrap_or_default();
                 App {
+                    project_id: d.labels().get(projects::PROJECT_LABEL).cloned(),
                     name: d.name_any(),
                     image,
                     replicas,
@@ -145,12 +154,21 @@ async fn deploy(
 ) -> Result<Json<Value>> {
     mutation(&headers)?;
     validate(&d)?;
+    let _project_gate = s.projects.gate.lock().await;
+    s.projects.require(&s.namespace, d.project_id.as_deref())?;
+    let mut labels = BTreeMap::from([(
+        "app.kubernetes.io/managed-by".to_string(),
+        "kubeweasel".to_string(),
+    )]);
+    if let Some(id) = &d.project_id {
+        labels.insert(projects::PROJECT_LABEL.into(), id.clone());
+    }
     if let Some(c) = s.client {
         let api: Api<Deployment> = Api::namespaced(c.clone(), &s.namespace);
-        let deployment:Deployment=serde_json::from_value(json!({"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":d.name,"labels":{"app.kubernetes.io/managed-by":"kubeweasel"}},"spec":{"replicas":d.replicas,"selector":{"matchLabels":{"app.kubernetes.io/name":d.name}},"template":{"metadata":{"labels":{"app.kubernetes.io/name":d.name,"app.kubernetes.io/managed-by":"kubeweasel"}},"spec":{"containers":[{"name":"app","image":d.image,"ports":[{"containerPort":d.port}],"resources":{"requests":{"cpu":"100m","memory":"64Mi"},"limits":{"cpu":"1","memory":"512Mi"}}}]}}}})).map_err(|_|invalid("Invalid deployment"))?;
+        let deployment:Deployment=serde_json::from_value(json!({"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":d.name,"labels":labels},"spec":{"replicas":d.replicas,"selector":{"matchLabels":{"app.kubernetes.io/name":d.name}},"template":{"metadata":{"labels":{"app.kubernetes.io/name":d.name,"app.kubernetes.io/managed-by":"kubeweasel"}},"spec":{"containers":[{"name":"app","image":d.image,"ports":[{"containerPort":d.port}],"resources":{"requests":{"cpu":"100m","memory":"64Mi"},"limits":{"cpu":"1","memory":"512Mi"}}}]}}}})).map_err(|_|invalid("Invalid deployment"))?;
         api.create(&PostParams::default(), &deployment).await?;
         let services: Api<Service> = Api::namespaced(c, &s.namespace);
-        let service:Service=serde_json::from_value(json!({"apiVersion":"v1","kind":"Service","metadata":{"name":d.name,"labels":{"app.kubernetes.io/managed-by":"kubeweasel"}},"spec":{"selector":{"app.kubernetes.io/name":d.name},"ports":[{"port":d.port,"targetPort":d.port}]}})).map_err(|_|invalid("Invalid service"))?;
+        let service:Service=serde_json::from_value(json!({"apiVersion":"v1","kind":"Service","metadata":{"name":d.name,"labels":labels},"spec":{"selector":{"app.kubernetes.io/name":d.name},"ports":[{"port":d.port,"targetPort":d.port}]}})).map_err(|_|invalid("Invalid service"))?;
         if let Err(e) = services.create(&PostParams::default(), &service).await {
             return Err(Error(
                 StatusCode::BAD_GATEWAY,
@@ -168,6 +186,7 @@ async fn deploy(
             ));
         }
         let app = App {
+            project_id: d.project_id,
             name: d.name,
             image: d.image,
             replicas: d.replicas,
@@ -291,6 +310,12 @@ async fn logs(State(s): State<AppState>, Path(name): Path<String>) -> Result<Jso
 }
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let address = std::env::var("KUBEWEASEL_BIND").unwrap_or_else(|_| "127.0.0.1:7878".into());
+    let auth = auth::AuthState::open(
+        &std::env::var("KUBEWEASEL_AUTH_DB").unwrap_or_else(|_| "kubeweasel.db".into()),
+        &address,
+        std::env::var("KUBEWEASEL_PUBLIC_ORIGIN").ok(),
+    )?;
     let demo = std::env::args().any(|a| a == "--demo");
     let namespace = std::env::var("KUBEWEASEL_NAMESPACE").unwrap_or_else(|_| "default".into());
     let client = if demo {
@@ -308,6 +333,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             apps.insert(
                 name.into(),
                 App {
+                    project_id: None,
                     name: name.into(),
                     image: image.into(),
                     replicas,
@@ -322,6 +348,13 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         namespace,
         apps: Arc::new(RwLock::new(apps)),
         settings: settings::SettingsState::default(),
+        projects: if demo {
+            projects::Store::open(":memory:")?
+        } else {
+            projects::Store::open(
+                &std::env::var("KUBEWEASEL_AUTH_DB").unwrap_or_else(|_| "kubeweasel.db".into()),
+            )?
+        },
     };
     let router = Router::new()
         .route(
@@ -356,13 +389,44 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             }),
         )
         .merge(settings::routes())
+        .merge(projects::routes())
+        .route(
+            "/projects.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../dashboard/projects.js"),
+                )
+            }),
+        )
         .merge(diagnostics::routes())
+        .merge(monitoring::routes())
+        .route(
+            "/monitoring.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../dashboard/monitoring.js"),
+                )
+            }),
+        )
         .route("/healthz", get(|| async { "ok" }))
         .route("/api/overview", get(overview))
         .route("/api/apps", post(deploy))
         .route("/api/apps/{name}/scale", post(scale))
         .route("/api/apps/{name}/restart", post(restart))
         .route("/api/apps/{name}/logs", get(logs))
+        .merge(auth::routes(auth.clone()))
+        .route(
+            "/auth.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    include_str!("../dashboard/auth.js"),
+                )
+            }),
+        )
+        .layer(axum::middleware::from_fn_with_state(auth, auth::guard))
         .with_state(s);
     let address = std::env::var("KUBEWEASEL_BIND").unwrap_or_else(|_| "127.0.0.1:7878".into());
     let listener = tokio::net::TcpListener::bind(&address).await?;
@@ -370,11 +434,14 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         "KubeWeasel → http://{address} ({})",
         if demo { "demo" } else { "live" }
     );
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await?;
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await?;
     Ok(())
 }
 #[cfg(test)]
@@ -397,6 +464,7 @@ mod tests {
     #[test]
     fn bounds_deployments() {
         let mut d = Deploy {
+            project_id: None,
             name: "web".into(),
             image: "nginx:stable".into(),
             port: 80,

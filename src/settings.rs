@@ -30,6 +30,7 @@ impl Drop for Forward {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Config {
+    project_id: Option<String>,
     image: String,
     replicas: i32,
     port: u16,
@@ -86,6 +87,7 @@ pub fn routes() -> Router<AppState> {
 }
 fn defaults(app: &App) -> Config {
     Config {
+        project_id: app.project_id.clone(),
         image: app.image.clone(),
         replicas: app.replicas,
         port: 80,
@@ -111,12 +113,14 @@ pub(crate) async fn load(s: &AppState, name: &str) -> Result<Config> {
             .get(name)
             .cloned()
             .unwrap_or_else(|| defaults(a));
+        cfg.project_id = a.project_id.clone();
         cfg.image = a.image.clone();
         cfg.replicas = a.replicas;
         return Ok(cfg);
     }
     let api = managed(s, name).await?;
     let d = api.get(name).await?;
+    let project_id = d.labels().get(projects::PROJECT_LABEL).cloned();
     let spec = d.spec.ok_or_else(|| invalid("Deployment has no spec"))?;
     let c = spec
         .template
@@ -138,6 +142,7 @@ pub(crate) async fn load(s: &AppState, name: &str) -> Result<Config> {
             .unwrap_or_else(|| fallback.into())
     };
     let mut cfg = Config {
+        project_id,
         image: c.image.clone().unwrap_or_default(),
         replicas: spec.replicas.unwrap_or(1),
         port: c
@@ -213,6 +218,7 @@ async fn general(
 ) -> Result<Json<Value>> {
     mutation(&headers)?;
     validate(&Deploy {
+        project_id: None,
         name: name.clone(),
         image: g.image.clone(),
         port: 80,
