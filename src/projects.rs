@@ -167,16 +167,13 @@ async fn remove(
     let _gate = s.projects.gate.lock().await;
     s.projects.require(&s.namespace, Some(&id))?;
     let assigned = if let Some(client) = s.client {
-        let deployments: Api<Deployment> = Api::namespaced(client, &s.namespace);
-        !deployments
-            .list(
-                &ListParams::default()
-                    .labels(&format!("{LABEL},{PROJECT_LABEL}={id}"))
-                    .limit(1),
-            )
-            .await?
-            .items
-            .is_empty()
+        !workloads::list(
+            client,
+            &s.namespace,
+            &format!("{LABEL},{PROJECT_LABEL}={id}"),
+        )
+        .await?
+        .is_empty()
     } else {
         s.apps
             .read()
@@ -312,6 +309,7 @@ mod lifecycle_tests {
             namespace: "test".into(),
             apps: Arc::new(RwLock::new(BTreeMap::new())),
             settings: settings::SettingsState::default(),
+            storage: storage::StorageState::default(),
             projects: store,
         };
         let mut headers = HeaderMap::new();
@@ -332,6 +330,7 @@ mod lifecycle_tests {
             State(s.clone()),
             headers.clone(),
             Json(Deploy {
+                workload_kind: String::new(),
                 project_id: Some(id.clone()),
                 name: "test-app".into(),
                 image: "nginx:stable".into(),

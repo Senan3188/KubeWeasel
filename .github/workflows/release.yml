@@ -1,0 +1,115 @@
+name: Release
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+  image:
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate release versions
+        id: release
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          python3 - "$VERSION" <<'PY'
+          import pathlib, re, sys, tomllib
+          version=sys.argv[1]
+          assert tomllib.loads(pathlib.Path('Cargo.toml').read_text())['package']['version']==version
+          chart=pathlib.Path('charts/kubeweasel/Chart.yaml').read_text()
+          assert re.search(r'^version: '+re.escape(version)+r'$',chart,re.M)
+          assert re.search(r'^appVersion: '+re.escape(version)+r'$',chart,re.M)
+          assert f'VERSION={version}\n' in pathlib.Path('scripts/install.sh').read_text()
+          PY
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          tags: ghcr.io/senan3188/kubeweasel:${{ steps.release.outputs.version }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/Senan3188/KubeWeasel
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=Apache-2.0
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+  publish:
+    needs: image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
+        with:
+          version: v3.17.3
+      - name: Publish multi-platform image and release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          IMAGE=ghcr.io/senan3188/kubeweasel
+          docker buildx imagetools create --tag "$IMAGE:$VERSION" "$IMAGE:$VERSION-amd64" "$IMAGE:$VERSION-arm64"
+          mkdir dist
+          helm package charts/kubeweasel --destination dist
+          cp scripts/install.sh dist/install.sh
+          (cd dist && sha256sum kubeweasel-*.tgz install.sh > SHA256SUMS)
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "KubeWeasel $VERSION" --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+      - name: Verify anonymous image access before making release installable
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request
+          scope='repository:senan3188/kubeweasel:pull'
+          url='https://ghcr.io/token?service=ghcr.io&scope='+scope
+          token=json.load(urllib.request.urlopen(url))['token']
+          request=urllib.request.Request('https://ghcr.io/v2/senan3188/kubeweasel/manifests/'+ '${{ github.ref_name }}'[1:], headers={'Authorization':'Bearer '+token,'Accept':'application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json'})
+          index=json.load(urllib.request.urlopen(request))
+          arches={m.get('platform',{}).get('architecture') for m in index['manifests']}
+          assert {'amd64','arm64'}<=arches
+          PY
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false
+      - name: First package publication help
+        if: failure()
+        run: echo 'If anonymous GHCR access failed, set the kubeweasel package visibility to Public in GitHub Packages, then rerun the failed publish job. The release remains a draft until anonymous pulls pass.' >> "$GITHUB_STEP_SUMMARY"

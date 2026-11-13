@@ -472,6 +472,7 @@ mod tests {
             namespace: "test".into(),
             apps: Arc::new(RwLock::new(BTreeMap::new())),
             settings: settings::SettingsState::default(),
+            storage: storage::StorageState::default(),
             projects: projects::Store::open(":memory:").unwrap(),
         };
         Router::new()

@@ -1,7 +1,10 @@
+{{- if not .Values.persistence.existingClaim }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ .Release.Name }}-data
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   accessModes: [ReadWriteOnce]
   {{- if .Values.persistence.storageClass }}
@@ -10,6 +13,7 @@ spec:
   resources:
     requests:
       storage: {{ .Values.persistence.size }}
+{{- end }}
 {{- if .Values.publicOrigin }}
 ---
 apiVersion: v1

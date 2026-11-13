@@ -225,7 +225,7 @@ async fn diagnostics(State(s): State<AppState>, Path(name): Path<String>) -> Res
         checks.push(dns_check(&dns(&d.host).await));
     }
     checks.push(check("address","Ingress address",if addresses.is_empty(){"info"}else{"pass"},if addresses.is_empty(){"No external address advertised. This can be normal with local port forwarding; it does not confirm a routing failure.".into()}else{format!("Point your DNS A/AAAA or CNAME records to: {}",addresses.join(", "))}));
-    checks.push(check("tls","HTTPS",if d.tls_secret.is_empty(){"info"}else{"unknown"},if d.tls_secret.is_empty(){"HTTP only. Configure a TLS Secret to enable HTTPS. A local port forward does not add TLS.".into()}else{format!("Ingress references TLS Secret '{}'. Its existence, expiry, and hostname coverage are not verified here. Test HTTPS to validate the served certificate.",d.tls_secret)}));
+    checks.push(check("tls","HTTPS",if d.tls_secret.is_empty(){"info"}else{"unknown"},if d.tls_secret.is_empty(){"HTTP only. Configure a TLS Secret to enable HTTPS. A local port forward does not add TLS.".into()}else if https::mode(d)=="automatic"{"Automatic HTTPS is configured. See the certificate status panel for issuance and renewal; Test connection validates the certificate served.".into()}else{format!("Ingress references TLS Secret '{}'. Its existence, expiry, and hostname coverage are not verified here. Test HTTPS to validate the served certificate.",d.tls_secret)}));
     Ok(Json(
         json!({"demo":false,"host":d.host,"path":d.path,"scheme":if d.tls_secret.is_empty(){"http"}else{"https"},"classes":class_info,"addresses":addresses,"checks":checks}),
     ))

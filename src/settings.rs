@@ -31,6 +31,8 @@ impl Drop for Forward {
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Config {
     project_id: Option<String>,
+    workload_kind: String,
+    max_replicas: i32,
     image: String,
     replicas: i32,
     port: u16,
@@ -48,6 +50,12 @@ pub(crate) struct Domain {
     pub(crate) path: String,
     pub(crate) ingress_class: String,
     pub(crate) tls_secret: String,
+    #[serde(default)]
+    pub(crate) tls_mode: String,
+    #[serde(default)]
+    pub(crate) issuer: String,
+    #[serde(default)]
+    pub(crate) issuer_kind: String,
 }
 #[derive(Deserialize)]
 struct General {
@@ -88,6 +96,12 @@ pub fn routes() -> Router<AppState> {
 fn defaults(app: &App) -> Config {
     Config {
         project_id: app.project_id.clone(),
+        workload_kind: app.workload_kind.clone(),
+        max_replicas: if app.workload_kind == "StatefulSet" {
+            1
+        } else {
+            20
+        },
         image: app.image.clone(),
         replicas: app.replicas,
         port: 80,
@@ -116,10 +130,29 @@ pub(crate) async fn load(s: &AppState, name: &str) -> Result<Config> {
         cfg.project_id = a.project_id.clone();
         cfg.image = a.image.clone();
         cfg.replicas = a.replicas;
+        cfg.max_replicas = if a.workload_kind == "StatefulSet"
+            || s.storage
+                .demo
+                .read()
+                .await
+                .get(name)
+                .is_some_and(|v| !v.is_empty())
+        {
+            1
+        } else {
+            20
+        };
         return Ok(cfg);
     }
     let api = managed(s, name).await?;
     let d = api.get(name).await?;
+    let max_replicas = if api.kind == "StatefulSet"
+        || storage::has_pvc(&serde_json::to_value(&d).unwrap_or(Value::Null))
+    {
+        1
+    } else {
+        20
+    };
     let project_id = d.labels().get(projects::PROJECT_LABEL).cloned();
     let spec = d.spec.ok_or_else(|| invalid("Deployment has no spec"))?;
     let c = spec
@@ -142,6 +175,8 @@ pub(crate) async fn load(s: &AppState, name: &str) -> Result<Config> {
             .unwrap_or_else(|| fallback.into())
     };
     let mut cfg = Config {
+        workload_kind: api.kind,
+        max_replicas,
         project_id,
         image: c.image.clone().unwrap_or_default(),
         replicas: spec.replicas.unwrap_or(1),
@@ -171,6 +206,7 @@ pub(crate) async fn load(s: &AppState, name: &str) -> Result<Config> {
             == Some("kubeweasel")
         && let Some(spec) = i.spec
     {
+        https::read_annotations(&mut cfg.domain, &i.metadata.annotations.unwrap_or_default());
         cfg.domain.ingress_class = spec.ingress_class_name.unwrap_or_default();
         cfg.domain.tls_secret = spec
             .tls
@@ -217,7 +253,14 @@ async fn general(
     Json(g): Json<General>,
 ) -> Result<Json<Value>> {
     mutation(&headers)?;
+    let _demo_gate = if s.client.is_none() {
+        Some(s.storage.gate.lock().await)
+    } else {
+        None
+    };
+    storage::demo_limit(&s, &name, g.replicas).await?;
     validate(&Deploy {
+        workload_kind: String::new(),
         project_id: None,
         name: name.clone(),
         image: g.image.clone(),
@@ -434,17 +477,24 @@ fn ingress(name: &str, d: &Domain, port: i32) -> Value {
     if !d.tls_secret.is_empty() {
         spec["tls"] = json!([{"hosts":[d.host],"secretName":d.tls_secret}]);
     }
-    json!({"apiVersion":"networking.k8s.io/v1","kind":"Ingress","metadata":{"name":name,"labels":{"app.kubernetes.io/managed-by":"kubeweasel"}},"spec":spec})
+    let mut annotations = https::annotations(d);
+    annotations
+        .as_object_mut()
+        .unwrap()
+        .retain(|_, v| !v.is_null());
+    json!({"apiVersion":"networking.k8s.io/v1","kind":"Ingress","metadata":{"name":name,"labels":{"app.kubernetes.io/managed-by":"kubeweasel"},"annotations":annotations},"spec":spec})
 }
-async fn domain(
+pub(crate) async fn domain(
     State(s): State<AppState>,
     Path(name): Path<String>,
     headers: HeaderMap,
-    Json(d): Json<Domain>,
+    Json(mut d): Json<Domain>,
 ) -> Result<Json<Value>> {
     mutation(&headers)?;
     validate_domain(&d)?;
     let mut cfg = load(&s, &name).await?;
+    https::normalize(&name, &mut d, &cfg.domain)?;
+    https::require_automatic(&s, &d).await?;
     if let Some(c) = s.client.clone() {
         let api: Api<Ingress> = Api::namespaced(c, &s.namespace);
         let existing = api.get_opt(&name).await?;
@@ -476,7 +526,7 @@ async fn domain(
         } else {
             let value = ingress(&name, &d, service_port(&s, &name).await?);
             if existing.is_some() {
-                api.patch(&name,&PatchParams::default(),&Patch::Merge(json!({"spec":{"rules":value["spec"]["rules"],"ingressClassName":if d.ingress_class.is_empty(){Value::Null}else{json!(d.ingress_class)},"tls":if d.tls_secret.is_empty(){Value::Null}else{value["spec"]["tls"].clone()}}}))).await?;
+                api.patch(&name,&PatchParams::default(),&Patch::Merge(json!({"metadata":{"annotations":https::annotations(&d)},"spec":{"rules":value["spec"]["rules"],"ingressClassName":if d.ingress_class.is_empty(){Value::Null}else{json!(d.ingress_class)},"tls":if d.tls_secret.is_empty(){Value::Null}else{value["spec"]["tls"].clone()}}}))).await?;
             } else {
                 let object: Ingress =
                     serde_json::from_value(value).map_err(|_| invalid("Invalid Ingress"))?;
@@ -597,6 +647,7 @@ mod tests {
             path: "/app".into(),
             ingress_class: "nginx".into(),
             tls_secret: "web-tls".into(),
+            ..Default::default()
         };
         let i = ingress("web", &d, 8080);
         assert_eq!(

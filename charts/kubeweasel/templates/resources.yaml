@@ -8,8 +8,14 @@ kind: Role
 metadata:
   name: {{ .Release.Name }}
 rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, create]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
   - apiGroups: [apps]
-    resources: [deployments]
+    resources: [deployments, statefulsets]
     verbs: [get, list, create, patch]
   - apiGroups: [""]
     resources: [services]
@@ -17,6 +23,12 @@ rules:
   - apiGroups: [""]
     resources: [pods, pods/log]
     verbs: [get, list]
+  - apiGroups: [cert-manager.io]
+    resources: [certificates, issuers]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list, create]
   - apiGroups: ["metrics.k8s.io"]
     resources: [pods]
     verbs: [get, list]
@@ -78,6 +90,22 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+          startupProbe:
+            exec:
+              command: [kubeweasel, --healthcheck]
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: [kubeweasel, --healthcheck]
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: [kubeweasel, --healthcheck]
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
           volumeMounts:
             - name: auth-data
               mountPath: /data
@@ -96,4 +124,4 @@ spec:
       volumes:
         - name: auth-data
           persistentVolumeClaim:
-            claimName: {{ .Release.Name }}-data
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" .Release.Name) | quote }}

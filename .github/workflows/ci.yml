@@ -1,0 +1,36 @@
+name: Checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Rust checks
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+          cargo +1.98.0 fmt --check
+          cargo +1.98.0 test --locked
+          cargo +1.98.0 clippy --locked --all-targets -- -D warnings
+      - name: Dashboard and installer checks
+        run: |
+          for file in dashboard/*.js; do node --check "$file"; done
+          bash -n scripts/install.sh
+          python3 -m unittest discover -s tests -p 'test_installer.py'
+      - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
+        with:
+          version: v3.17.3
+      - name: Helm checks
+        run: |
+          helm lint charts/kubeweasel
+          helm template kubeweasel charts/kubeweasel --set publicOrigin=https://kubeweasel.example.com > /tmp/public.yaml
+          helm template kubeweasel charts/kubeweasel --set ingressClassDiscovery=false,nodeMonitoring=false,storageClassDiscovery=false,clusterIssuerDiscovery=false > /tmp/minimal.yaml
+          helm template kubeweasel charts/kubeweasel --set persistence.existingClaim=retained-data > /tmp/reinstall.yaml
+          grep -q 'helm.sh/resource-policy: keep' /tmp/public.yaml
+          grep -q 'claimName: "retained-data"' /tmp/reinstall.yaml
+          if grep -q 'kind: PersistentVolumeClaim' /tmp/reinstall.yaml; then exit 1; fi

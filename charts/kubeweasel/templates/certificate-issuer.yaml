@@ -1,0 +1,18 @@
+{{- if .Values.certificateIssuer.create }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Values.certificateIssuer.name }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  acme:
+    email: {{ required "Set certificateIssuer.email when enabling issuer creation" .Values.certificateIssuer.email | quote }}
+    server: {{ if .Values.certificateIssuer.staging }}https://acme-staging-v02.api.letsencrypt.org/directory{{ else }}https://acme-v02.api.letsencrypt.org/directory{{ end }}
+    privateKeySecretRef:
+      name: {{ .Values.certificateIssuer.name }}-account
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: {{ required "Set certificateIssuer.ingressClass when enabling issuer creation" .Values.certificateIssuer.ingressClass | quote }}
+{{- end }}

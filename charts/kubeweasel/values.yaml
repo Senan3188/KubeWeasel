@@ -1,5 +1,5 @@
 image:
-  repository: kubeweasel
+  repository: ghcr.io/senan3188/kubeweasel
   tag: "0.1.0"
   pullPolicy: IfNotPresent
 # Read-only cluster-scoped ingress-class discovery for networking diagnostics.
@@ -10,5 +10,18 @@ nodeMonitoring: true
 # Set an HTTPS origin only when a reverse proxy terminates TLS for this host.
 publicOrigin: ""
 persistence:
+  # Existing account PVC, for reinstalling without recreating account storage.
+  existingClaim: ""
   size: 1Gi
   storageClass: ""
+# Optional read-only cluster-issuer discovery. Namespace Issuers always work.
+clusterIssuerDiscovery: true
+# Creates a namespace-scoped Let's Encrypt HTTP-01 Issuer, not cert-manager itself.
+certificateIssuer:
+  create: false
+  name: kubeweasel-letsencrypt
+  email: ""
+  ingressClass: ""
+  staging: true
+# Read-only storage-class choices; volume creation still uses namespace RBAC.
+storageClassDiscovery: true

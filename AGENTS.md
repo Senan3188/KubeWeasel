@@ -7,8 +7,11 @@ These instructions apply throughout this repository.
 - `src/projects.rs`: project-folder persistence, assignment labels, and empty-folder deletion rules.
 - `src/auth.rs`: single-owner setup, SQLite-backed sessions, password hashing, request protection, and login rate limits.
 - `src/main.rs`: Axum server, embedded dashboard assets, deployment listing/creation, scaling, restarts, and logs.
+- `src/workloads.rs`: Deployment/StatefulSet operations, ownership checks, version preconditions, and single-replica storage guards.
+- `src/storage.rs`: standalone retained PVCs, mount validation, claim-sharing checks, and explicit detach without deleting data.
 - `src/settings.rs`: application configuration, resource ownership checks, Ingress management, and temporary pod port forwarding.
 - `src/monitoring.rs`: application and whole-node usage, allocatable capacity, pod reservations, unit conversion, and metrics availability.
+- `src/https.rs`: cert-manager discovery, issuer validation, ingress-shim annotations, and certificate status; never reads private keys.
 - `src/diagnostics.rs`: networking checks, ingress-class discovery, DNS lookup, and HTTP/HTTPS connection testing.
 - `dashboard/`: build-free HTML, CSS, and JavaScript embedded in the Rust binary. Rebuild and restart the server after editing assets.
 - `charts/kubeweasel/`: Helm installation, persistent owner-account storage, namespace-scoped permissions, and optional read-only cluster discovery/monitoring.
@@ -26,6 +29,7 @@ These instructions apply throughout this repository.
 
 ## Implementation rules
 
+- Never delete PVCs or data during detach, scale, or workload updates. Keep storage-backed apps and StatefulSets single-replica; use Recreate for storage-backed Deployments and retain PVCs independently.
 - Keep projects as organizational folders; store assignment in `kubeweasel.io/project`, preserve project IDs on rename, and reject deletion of non-empty folders. Moving apps must not restart pods or change namespaces.
 - Keep demo and live behavior explicit. Never silently substitute sample data for cluster errors.
 - Kubernetes resources are the source of truth for live configuration; demo settings remain in memory.
@@ -35,6 +39,7 @@ These instructions apply throughout this repository.
 - Report partial failures for operations spanning multiple Kubernetes resources; do not claim they are atomic.
 - Bind temporary forward listeners to loopback and cancel their tasks when stopped or dropped.
 - Distinguish saved routing configuration, controller-class registration, DNS resolution, and actual connection success.
+- Automatic HTTPS must preserve legacy TLS settings, remove obsolete issuer annotations on mode changes, and distinguish certificate readiness from public HTTPS reachability. Use staging or self-signed issuers for tests; never silently request production certificates.
 - Connection tests use the saved hostname/path, validate HTTPS certificates, do not follow redirects, and explain where the test runs.
 - Report missing metrics as unavailable, not zero. Distinguish application usage from whole-node/VM usage, allocatable capacity, requests, and configured limits. Never imply these measurements are cloud billing totals.
 - Keep browser chart history bounded and identify stale samples; node reservations span active scheduled pods across all namespaces.

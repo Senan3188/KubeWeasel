@@ -1,6 +1,17 @@
 KubeWeasel is installed in {{ .Release.Namespace }}.
-Access the dashboard through an authenticated Kubernetes port-forward:
+{{- if .Values.publicOrigin }}
+The dashboard expects HTTPS requests for {{ .Values.publicOrigin }} through your configured reverse proxy.
+{{- else }}
+Keep this local port-forward running:
 
-  kubectl -n {{ .Release.Namespace }} port-forward deployment/{{ .Release.Name }} 7878:7878
+  kubectl -n {{ .Release.Namespace }} port-forward --address 127.0.0.1 deployment/{{ .Release.Name }} 7878:7878
 
 Open http://127.0.0.1:7878
+{{- end }}
+
+For first-run owner setup, retrieve the token locally:
+
+  kubectl -n {{ .Release.Namespace }} logs deployment/{{ .Release.Name }} --container dashboard
+
+Existing owners sign in normally. Setup tokens change on restart until setup is complete.
+Uninstall retains account storage and deployed applications. Back up their data separately.

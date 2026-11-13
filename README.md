@@ -35,26 +35,64 @@ Supported operations:
 
 Deployment names must be lowercase DNS labels of at most 63 characters. New applications default to one replica and port 80. Containers request 100m CPU and 64Mi memory, with limits of 1 CPU and 512Mi memory. Creating an existing name fails rather than overwriting resources. Deployment and Service creation are separate operations; if the latter fails, the error explicitly reports the partial creation so it can be inspected.
 
-## Install with Helm
+## Install from the command line
 
-Build and push your own image to a registry your cluster can pull from:
+Requires a running Kubernetes cluster, `kubectl`, Helm 3.12+ (or Helm 4), Bash, curl, and a default StorageClass (or a class you choose). No Rust or Docker installation is needed on the user's computer. The release image supports Linux AMD64 and ARM64.
 
 ```sh
-docker build -t YOUR_REGISTRY/kubeweasel:0.1.0 .
-docker push YOUR_REGISTRY/kubeweasel:0.1.0
-helm upgrade --install kubeweasel ./charts/kubeweasel \
-  --namespace kubeweasel --create-namespace \
-  --set image.repository=YOUR_REGISTRY/kubeweasel
+curl -fsSL https://github.com/Senan3188/KubeWeasel/releases/latest/download/install.sh | bash
+```
+
+The installer uses your current Kubernetes context, prints the selected context and namespace, downloads the versioned Helm chart, verifies its SHA-256 checksum, and waits for account storage and dashboard readiness. It does not install Kubernetes, Helm, ingress controllers, Metrics Server, or cert-manager. Default access stays local through Kubernetes port-forwarding; it does not expose a public dashboard. The release's published checksum detects a corrupt/mismatched chart; it is not independent verification of a compromised release publisher.
+
+For a reviewable, pinned installation and explicit cluster selection:
+
+```sh
+curl -fsSLo install.sh https://github.com/Senan3188/KubeWeasel/releases/download/v0.1.0/install.sh
+# Review install.sh before executing it.
+bash install.sh install --context YOUR_CONTEXT --namespace kubeweasel --version 0.1.0
+```
+
+Use `--storage-class YOUR_CLASS` if the cluster has no default, and `--storage-size 2Gi` to choose the size of a new account volume. If optional cluster-level discovery/monitoring permissions are unavailable, use `--namespace-only` with namespace permissions and an existing namespace. This disables node monitoring and cluster-wide class/issuer discovery. In this mode the installer does not create a namespace; an administrator must create it and grant the namespace permissions first. The default installation grants namespace-scoped application mutations and optional read-only cluster monitoring/discovery roles.
+
+After installation, run the printed port-forward command and open the dashboard:
+
+```sh
+bash install.sh open --context YOUR_CONTEXT --namespace kubeweasel
+# Open http://127.0.0.1:7878 while the command remains running.
+```
+
+For first-run setup, use the token in the dashboard pod's logs (the installer prints the exact command). Create the owner account in the browser. The token changes after restart until account setup is completed. Existing owners sign in normally. Account data and projects live in the persistent account volume; application settings and history live in Kubernetes resources.
+
+```sh
+bash install.sh status --context YOUR_CONTEXT --namespace kubeweasel
+bash install.sh upgrade --context YOUR_CONTEXT --namespace kubeweasel --version 0.1.0
+bash install.sh uninstall --context YOUR_CONTEXT --namespace kubeweasel
+```
+
+Upgrade preserves the release's existing Helm values and account data. The dashboard uses a single-instance Recreate strategy for SQLite, so an upgrade briefly interrupts dashboard access. Application workloads keep running. Failed readiness checks leave resources in place and print inspection steps; use `upgrade` to retry a failed install. No automatic uninstall or namespace/data deletion is performed on failure.
+
+Uninstall removes the dashboard and its permissions, **retaining the namespace, account PVC, deployed applications, their volumes and registry credentials**. A chart-created certificate issuer is also retained so existing certificate renewal can continue. Existing ingress controllers/cert-manager are not removed. Reinstalling with the same namespace/release automatically reuses the retained account PVC. Old releases without an explicit PVC retention policy must be upgraded before this installer will uninstall them. Back up the account database and application databases independently; namespace/PVC deletion by an administrator can still destroy data.
+
+### Helm directly
+
+Each GitHub release includes `kubeweasel-VERSION.tgz`, `install.sh`, and `SHA256SUMS`. Download and verify them from the [releases page](https://github.com/Senan3188/KubeWeasel/releases), then:
+
+```sh
+helm upgrade --install kubeweasel ./kubeweasel-0.1.0.tgz \
+  --namespace kubeweasel --create-namespace --wait --timeout 8m
 kubectl -n kubeweasel port-forward deployment/kubeweasel 7878:7878
 ```
 
-The chart grants namespace-scoped access only. Applications are deployed in the installation namespace. The dashboard listens on pod loopback; Kubernetes port-forward provides access without exposing a network Service or ingress. Your local kubeconfig may grant broader permissions than the chart.
+For a direct Helm reinstall using a retained account volume, add `--set persistence.existingClaim=kubeweasel-data`. The installer handles this detection automatically. Advanced HTTPS reverse-proxy setup and optional discovery/monitoring controls are described below.
+
+For development, build an image with `docker build -t YOUR_REGISTRY/kubeweasel:0.1.0 .` and push it, or use the local Docker Desktop image store. The installer accepts `--chart charts/kubeweasel --image-repository YOUR_REGISTRY/kubeweasel --image-tag 0.1.0` for testing. These overrides do not download or verify the release chart.
 
 ## Access model and current limits
 
 This version supports one owner account with full access, without teams or project-specific permissions. `KUBEWEASEL_BIND` defaults to `127.0.0.1:7878`. Every application API requires an owner session. Mutation requests also require a session-bound CSRF token and reject unexpected origins. Public access requires an HTTPS reverse proxy and KUBEWEASEL_PUBLIC_ORIGIN; see owner setup below.
 
-This release does not yet implement Git builds, project-level permissions or environments, automatic HTTPS provisioning, secrets editing, private registry setup, rollback history, a custom-resource controller, or multi-cluster support. Existing cluster networking, registry credentials, and admission policies still apply. Health indicates replica readiness; it is not an application-level health probe. Cluster changes occur when you deploy, scale, restart, or save application settings through the UI.
+This release does not yet implement private Git repository access, automatic deployment webhooks, project-level permissions or environments, secrets editing, a custom-resource controller, or multi-cluster support. Existing cluster networking, registry credentials, and admission policies still apply. Health indicates replica readiness; it is not an application-level health probe. Cluster changes occur when you deploy, scale, restart, or save application settings through the UI.
 
 ## Development
 
@@ -69,11 +107,11 @@ node --check dashboard/dashboard.js
 
 ## Application configuration
 
-Click an application card or name to open its configuration screen. Links such as `/#apps/hello-weasel/networking` can be bookmarked. The screen includes General, Networking, Environment, Resources, and Logs tabs.
+Click an application card or name to open its configuration screen. Links such as `/#apps/hello-weasel/networking` can be bookmarked. The screen includes General, History, Networking, Environment, Storage, Resources, and Logs tabs.
 
 - **General:** change the container image and replica count. Saving applies immediately; changing the image rolls out new pods.
 - **Networking:** change the container port and Service target port, keeping the Service frontend port stable. The process must actually listen on the chosen port. Start/stop a temporary port forward on `127.0.0.1` of the machine running KubeWeasel. Forwarding requires a ready pod, supports at most 10 tunnels and 32 connections per tunnel, and stops when the server stops. Each connection is limited to five minutes. In-cluster installs should use the provided kubectl command on the user's computer.
-- **Domains:** configure one hostname/path route per application, an optional ingress class, and an optional existing TLS Secret. This creates or updates an owned `networking.k8s.io/v1` Ingress; clearing the hostname removes it. An ingress controller, matching DNS, and any HTTPS certificate must already exist. Saving an Ingress does not prove external routing works.
+- **Domains:** configure one hostname/path route per application, an optional ingress class, and HTTP-only, automatic HTTPS, or an existing TLS Secret. This creates or updates an owned `networking.k8s.io/v1` Ingress; clearing the hostname removes it. An ingress controller and matching DNS must already exist; existing-certificate mode also requires a TLS Secret. Automatic mode uses cert-manager to obtain it. Saving an Ingress does not prove external routing works.
 - **Environment:** edit literal variables, including multiline values. Saving replaces literal variables while preserving Secret/ConfigMap references. Literal values are stored in the Deployment and returned to dashboard users; use Secrets for credentials.
 - **Resources:** change positive CPU and memory requests/limits; requests cannot exceed limits. CPU accepts cores or millicores; memory accepts bytes, Ki, Mi, or Gi.
 - **Logs:** refresh recent output without leaving the app screen.
@@ -148,8 +186,120 @@ Opt-in Python live checks now require `KUBEWEASEL_SESSION_COOKIE` in the test pr
 
 ## Projects
 
-Use **Projects** in the sidebar to organize applications into simple folders. Create a named project with an optional description, open it to see its applications, and use **Edit project** to rename it. New deployments can choose a project; existing apps appear under **Unassigned** until moved through **General → Project**. All owner-account capabilities remain the same; projects do not add roles, environments, namespace isolation, or permissions.
+**Projects** is the dashboard home and the sidebar entry point for applications. Create a named project with an optional description, open it to see its applications, and use **Edit project** to rename it. New applications are deployed from a project, with a project selection required in the form; existing apps without a project appear under **Unassigned** (shown only when needed) until moved through **General → Project**. All owner-account capabilities remain the same; projects do not add roles, environments, namespace isolation, or permissions.
 
 Live project names/descriptions are stored alongside the owner account in the SQLite database, scoped to the configured namespace. Application assignment is stored on the Deployment as the `kubeweasel.io/project` label. Renaming keeps the project ID stable. Moving an app changes only this metadata label; pods, Services, domains, and namespaces are unchanged. Empty folders may be deleted; move all applications out first. Project operations and deployment assignments are serialized within one dashboard process. Direct external Kubernetes changes are outside that coordination.
 
 Back up the SQLite database as well as Kubernetes resources to retain folder names and assignments. If project metadata is missing after a restore, applications with unknown project IDs are displayed in Unassigned. Demo project folders and assignments remain in memory and reset on restart; the owner account still persists.
+
+## Automatic HTTPS with cert-manager
+
+Networking offers **HTTP only**, **Automatic HTTPS**, and **Existing certificate Secret**. Legacy routes with a TLS Secret continue to use that existing certificate. Automatic mode lets you choose a ready namespace-scoped Issuer or ClusterIssuer and an explicit ingress class. KubeWeasel adds cert-manager ingress-shim annotations and a unique, stable TLS Secret reference to the app's owned Ingress. cert-manager creates the Certificate, issues the key/certificate, and renews it. KubeWeasel never reads Secret contents or private keys.
+
+Install cert-manager once per cluster if needed:
+
+```sh
+helm upgrade --install cert-manager cert-manager \
+  --repo https://charts.jetstack.io --namespace cert-manager \
+  --create-namespace --set crds.enabled=true
+```
+
+Configure a namespaced Let's Encrypt issuer through the KubeWeasel Helm chart:
+
+```sh
+helm upgrade --install kubeweasel ./charts/kubeweasel \
+  --namespace kubeweasel --create-namespace \
+  --set image.repository=YOUR_REGISTRY/kubeweasel \
+  --set certificateIssuer.create=true \
+  --set certificateIssuer.email=YOU@example.com \
+  --set certificateIssuer.ingressClass=traefik \
+  --set certificateIssuer.staging=true
+```
+
+cert-manager must already be installed before enabling issuer creation. Use your real certificate contact email. The staging default produces untrusted test certificates and avoids production issuance during setup. After verifying a real domain, use a separate issuer name (for example `letsencrypt-production`) with `certificateIssuer.staging=false`, then select that issuer in the app. This registers an ACME account with Let's Encrypt; review its terms and applicable rate limits before using production.
+
+For Let's Encrypt HTTP-01 validation, the public domain must resolve to the ingress controller and inbound port **80** must reach the cluster. HTTPS traffic then uses port **443**. A local `/etc/hosts` entry or loopback port-forward does not satisfy public ACME validation. Reserved local names such as `hello.test` cannot use Let's Encrypt; use an explicitly configured local test issuer or an existing certificate instead. Self-signed and staging certificates will not be trusted by normal browser/connection checks.
+
+The certificate status panel detects missing APIs and discovery permissions, lists available issuers, and refreshes every ten seconds while Networking is visible. It shows waiting/issuing, condition messages, issuance failures, readiness, expiration, and planned renewal when cert-manager supplies them. A stale Ready condition or mismatched certificate request is not reported as ready. Certificate readiness is separate from DNS, ingress reachability, and the certificate actually served; use **Test connection** for that final check.
+
+Switching modes removes the managed issuer annotations. HTTP-only mode also removes the route's TLS reference. Certificate objects and Secrets are deliberately retained, including when a route is removed; an existing Certificate may continue renewing until its owner garbage collection or administrator cleanup. Inspect dependencies before deleting unused certificates. Other Ingress annotations are preserved, and unmanaged Ingresses are never overwritten.
+
+The chart grants read-only `get/list` on namespace Certificates and Issuers; it does not grant the app Secret access or issuer-writing privileges. `clusterIssuerDiscovery=true` adds optional read-only ClusterIssuer discovery. Set it to `false` for namespace issuers only. HTTP-only and existing-certificate routes remain usable without cert-manager.
+
+An opt-in live test creates a temporary namespace, a self-signed issuer, and a zero-replica application; verifies real certificate issuance and switching back to HTTP; and deletes the namespace afterward. Run only on an explicitly selected test cluster:
+
+```sh
+KUBEWEASEL_RUN_HTTPS_TEST=1 cargo test --locked \
+  https::live_tests::cert_manager_issues_and_modes_round_trip -- --ignored
+```
+
+## Persistent volumes and database workloads
+
+When deploying a database or other stateful service, choose **Database / persistent service · StatefulSet**. StatefulSets are separate workload resources; existing Deployments are not automatically converted. This release supports zero or one replica for StatefulSets, with a headless governing Service. Replication, clustering, database backups, and high availability need database-specific configuration and are not supplied by increasing replicas.
+
+Open **Storage** on an app to create a PVC or attach an existing filesystem claim in the same namespace. Set the claim name, requested size (1–4096 GiB for new claims), optional StorageClass, and container mount path. New claims use ReadWriteOnce and the cluster default class when no class is specified. Up to eight mounts are supported on the `app` container. The page shows claim status, size, class, and mount path; a Pending claim may be awaiting provisioning or its first scheduled consumer. `storageClassDiscovery=false` disables the optional read-only cluster-wide class-discovery permission; manually entering a class name still works.
+
+Choose the mount path required by the particular database image/version; mounting an empty volume does not migrate data already stored in a container. Configure required database passwords and other image settings before using it. The Storage tab does not grant or manage filesystem ownership for you; some non-root images require an administrator to configure `fsGroup` or existing volume permissions. Database Services remain internal. PostgreSQL/MySQL require their normal TCP port and client; HTTP Ingress domains do not expose these database protocols.
+
+Attaching or detaching a volume replaces pods. Storage-backed Deployments use Recreate updates and are restricted to zero or one replica; new databases should use StatefulSets. Workload patches and storage changes are serialized within the dashboard process and use resource-version preconditions. Storage attachment refuses claims referenced by another workload or mounted by another active pod. Kubernetes users and controllers outside KubeWeasel can still change resources; this is not a substitute for database locking or storage fencing. ReadWriteOnce restricts nodes, not the number of pods on a node; use storage and database architecture appropriate for production.
+
+**Detach · retain data** removes only the pod mount/reference. PVCs are created independently without workload owner references. StatefulSet retention is also explicitly Retain. KubeWeasel has no PVC/data deletion endpoint or PVC delete permission. A retained claim can be attached again later. Deleting a namespace or manually deleting a PVC can still destroy its backing data according to the StorageClass reclaim policy. Persistence is not a backup.
+
+The Helm Role includes namespace-scoped StatefulSet operations and PVC get/list/create. Application listing, settings, logs, networking, projects, and restarts work for Deployments and StatefulSets. Demo mounts are explicitly simulated and disappear on restart; they do not provision storage.
+
+An opt-in live test creates an isolated namespace, StatefulSet, and 1 GiB PVC, writes a marker, verifies it survives pod replacement and detach/reattach, checks replica restrictions, and removes the test namespace (including its test data):
+
+```sh
+KUBEWEASEL_RUN_STORAGE_TEST=1 cargo test --locked \
+  storage::live_tests::data_survives_pod_replacement_and_detach -- --ignored
+```
+
+## Deploying from Git
+
+In a project, choose **Deploy application → Git repository**. Supply a public HTTPS repository on GitHub, GitLab, Codeberg, or Bitbucket, its branch, a Dockerfile path relative to the repository root, and the container port. The build context is the repository root; Dockerfiles in subdirectories still use that context. Private Git repositories, build arguments/secrets, custom contexts, webhooks, and automatic builds on push are not implemented in this first release. Use **General → Deploy settings → Build & deploy** after pushing changes. Container-image deployment continues to work.
+
+Choose an image registry:
+
+- **Docker Hub:** `docker.io/YOUR_USER/YOUR_APP`, Docker Hub username, and an access token with read/write permission.
+- **GitHub Container Registry:** `ghcr.io/YOUR_OWNER/YOUR_APP`, GitHub username, and a package token with `read:packages` and `write:packages` permission (plus organization authorization when required).
+- **Custom registry:** `registry.example.com[:PORT]/TEAM/APP`, registry username and token/password. The registry must have HTTPS certificates trusted by both the builder and the cluster nodes. Insecure HTTP registries and custom CA installation are not configured by KubeWeasel.
+
+Enter a repository without a tag. Each build gets a unique image tag. Registry credentials are sent only to your dashboard and saved as namespace Kubernetes `kubernetes.io/dockerconfigjson` Secrets. The dashboard creates them without reading them back or exposing them in the Source API. Tokens are not stored in workload annotations, browser storage, or logs. Leave the token empty on later builds to reuse the app's saved credentials; enter credentials again if changing the registry/image repository. Kubernetes uses the same Secret to pull the finished image. Credentials should have access only to the required image repository. Replacing credentials retains the old Secret so existing pods can continue pulling; administrators should revoke obsolete tokens and remove unused Secrets after checking references. Kubernetes Secret encryption at rest is a cluster configuration responsibility.
+
+Builds use one rootless `moby/buildkit:v0.33.0-rootless` Kubernetes Job per build, without a Docker socket, host mounts, or a mounted Kubernetes service-account token. The Job has CPU, memory and ephemeral-disk bounds, a 30-minute deadline, and no automatic retries. At most two unfinished KubeWeasel builds run in the namespace. Finished Jobs/logs expire after seven days; registry image cleanup is separate. Only the latest build's last 250 log lines (up to 64 KiB) are shown. Logs refresh every five seconds while General is open.
+
+The rootless runner follows [BuildKit's Kubernetes example](https://github.com/moby/buildkit/blob/master/examples/kubernetes/job.rootless.yaml): it requires unprivileged user namespaces, unconfined seccomp/AppArmor profiles, and BuildKit's `--oci-worker-no-process-sandbox`. Clusters enforcing the restricted Pod Security profile may reject it. Only build trusted source: Dockerfiles execute code and can access the builder's network and registry credentials. For untrusted/multi-tenant builds, use a separately isolated builder infrastructure. The build runs for its scheduled node architecture; multi-platform image builds are not configured.
+
+Build configuration and current build IDs live in workload annotations; Kubernetes Jobs are the source of build progress. A dashboard background worker resumes observing them after restart. New Git applications remain at zero replicas until the first successful build. Successful builds publish the image and request a rollout; **Deploying** is distinct from ready/running pods. Failed builds retain the previous image, runtime configuration, storage and replica count. Existing applications retain their replica count on a successful rebuild, including a paused app. If Job creation fails after creating the application, the error reports the partial result; open that application's General → Deploy settings panel to retry.
+
+The Helm Role adds namespace Job `get/list/create` and Secret **create only**, not Secret read/list/delete. Upgrade the chart before using Git builds in an existing Helm installation. Rootless runtime compatibility and registry push/pull connectivity must also be available.
+
+An opt-in local-cluster check performs a real public Git checkout and Dockerfile build into an OCI archive, exercises successful rollout handling with a known public image, verifies failed-build preservation, and removes its isolated test namespace. It does not publish to a registry and needs no registry credentials:
+
+```sh
+KUBEWEASEL_RUN_GIT_TEST=1 cargo test --locked \
+  git::live_tests::public_git_build_and_rollout_recovery -- --ignored
+```
+
+### Pulling existing container images
+
+For **Container image** deployments, choose Docker Hub, GitHub Container Registry, or Custom registry. Docker Hub accepts short names such as `nginx:stable`; GitHub accepts `owner/app:tag` or a full `ghcr.io` reference. Custom registries require a hostname (and optional port) in the image reference. The server rejects images whose hostname conflicts with the chosen provider. Public images need no credentials. Expand **Private image · registry credentials** to supply a username and token/password; credentials are saved in a Kubernetes image-pull Secret and attached before the first pod starts. This also works for StatefulSets. Credential Secrets are retained on partial deployment failures; administrators can remove unused Secrets after checking references. Demo mode simulates public-image deployments and does not save credentials.
+
+Source configuration lives in **General → Deploy settings**, for both existing and new applications. Switch between a container image and a public Git repository there; container images offer Docker Hub, GitHub Container Registry, and custom registries. Image source changes preserve environment, networking, storage and replicas; blank credentials preserve existing pull credentials. Replica changes use their own Save replicas action in the same panel. Switching from Git to an image clears the saved Git source and pending promotion under the build lock: an already running builder may finish, but its output will not replace the chosen image. Build status and logs are available inside the same panel.
+
+## Deployment history and rollback
+
+Open an app's **History** tab to review its latest 30 image releases and Git build attempts. Each entry shows its observation/request time, image, action, result, and rollout message. Git builds progress through Building → Deploying → Running (or Failed); paused workloads are shown separately. Kubernetes readiness is verified for the updated rollout, not inferred from an older ready pod. Readiness does not guarantee that your application is functionally correct.
+
+History is stored in a bounded workload annotation and survives dashboard restarts. Existing apps begin with an **Existing image** baseline; deployments from before this feature cannot be reconstructed. History tracks image changes/builds, not complete snapshots of every settings edit. Git images use the unique build tag; the commit SHA is not currently captured. An observation worker refreshes readiness and records a pullable image digest when Kubernetes reports one. Arbitrary container-runtime configuration IDs are not treated as pullable manifest digests.
+
+**Rollback to this image** is available for an earlier release that reached readiness. It restores that image (pinned to the observed manifest digest when available) and saved image-pull Secret references. When no pullable digest was captured, rollback uses the recorded reference: mutable tags may no longer point to the old image. Keep released images/digests and their credential Secrets in your registry; registry retention and expired credentials can make rollback fail. The rollback itself creates a new history entry and must reach readiness again.
+
+Rollback preserves current replicas, environment variables, resources, networking, mounts, PVCs, and database data. It does not revert migrations or guarantee compatibility with an older application version. Rolling back clears the saved Git source and pending Git promotion, so a build that is already running cannot later overwrite the rollback. Reconfigure Git in General → Deploy settings to build again. Paused apps remain paused. History and rollback require live mode; demo mode does not simulate successful rollbacks.
+
+An opt-in live check deploys a working image with a test PVC, changes to a broken image, observes failure, rolls back, verifies readiness, and confirms that the original PVC and runtime settings are preserved. It removes its isolated namespace afterward:
+
+```sh
+KUBEWEASEL_RUN_HISTORY_TEST=1 cargo test --locked \
+  history::live_tests::rollback_recovers_image_and_preserves_storage_and_configuration -- --ignored
+```
