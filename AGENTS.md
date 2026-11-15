@@ -74,7 +74,7 @@ These instructions apply throughout this repository.
 - The installer must pin every cluster command to the selected context, verify downloaded chart checksums, wait for readiness, and leave failed installs inspectable. Namespace-only installation uses an existing namespace and disables optional cluster-wide discovery roles.
 - Uninstall must preserve account storage, deployed workloads, application volumes, and registry credentials. Retain chart-created certificate issuers. Never add automatic namespace/PVC deletion; reinstall must reuse the retained account claim. Reject uninstall of legacy releases lacking PVC retention.
 - Keep health-check execution independent of owner setup/database initialization; probes must work for both loopback and HTTPS reverse-proxy configurations without weakening Host/Origin protection.
-- Cluster and node features are development-source changes until a new versioned release is published. A source push must not move the existing v0.1.0 release/tag or claim its installer includes unreleased features.
+- Version 0.2.0 includes cluster connections and node administration. Keep release notes in `docs/releases/`, document database/key backup requirements and migration behavior, and never move the existing v0.1.0 or v0.2.0 tags for fixes. Future source-only changes must not be advertised as part of an older installer release.
 - Publish immutable version tags. Keep Cargo version, chart version/appVersion, image tag, and installer default version aligned. Publish AMD64/ARM64 images and installer/chart checksums; verify anonymous multi-platform pulls before making a release public. Do not move existing release tags for fixes.
 
 ## Cluster boundaries

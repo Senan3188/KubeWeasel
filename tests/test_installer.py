@@ -14,7 +14,7 @@ args=sys.argv[1:]; tool=pathlib.Path(sys.argv[0]).name
 with open(os.environ['COMMAND_LOG'],'a') as f: f.write(json.dumps([tool]+args)+'\n')
 if tool=='helm':
  if 'version' in args: print('v3.17.3')
- elif 'show' in args: print('name: kubeweasel\nversion: 0.1.0')
+ elif 'show' in args: print('name: kubeweasel\nversion: 0.2.0')
  elif 'list' in args and os.environ.get('INSTALLED')=='1': print('kubeweasel')
  elif 'get' in args: print('kind: PersistentVolumeClaim\nmetadata:\n  annotations:\n    helm.sh/resource-policy: '+os.environ.get('POLICY','keep'))
  elif 'upgrade' in args and os.environ.get('FAIL_READY')=='1': sys.exit(1)
@@ -24,7 +24,7 @@ elif tool=='kubectl':
  elif 'pvc' in args and os.environ.get('CLAIM')=='1': print('persistentvolumeclaim/kubeweasel-data')
 elif tool=='curl':
  target=pathlib.Path(args[args.index('-o')+1]); url=args[args.index('-o')-1]
- if url.endswith('SHA256SUMS'): target.write_text(os.environ['CHECKSUM']+'  kubeweasel-0.1.0.tgz\n')
+ if url.endswith('SHA256SUMS'): target.write_text(os.environ['CHECKSUM']+'  kubeweasel-0.2.0.tgz\n')
  else: target.write_bytes(b'chart-fixture')
 '''
 
@@ -51,7 +51,7 @@ class InstallerTests(unittest.TestCase):
         result,calls=self.run_installer()
         self.assertEqual(result.returncode,0,result.stderr)
         upgrade=next(c for c in calls if c[0]=='helm' and 'upgrade' in c)
-        self.assertIn('--wait',upgrade); self.assertIn('image.tag=0.1.0',upgrade)
+        self.assertIn('--wait',upgrade); self.assertIn('image.tag=0.2.0',upgrade)
         self.assertIn('--create-namespace',upgrade)
         for c in calls:
             if c[0]=='kubectl': self.assertEqual(c[1:3],['--context','test-context'])
@@ -89,7 +89,7 @@ class InstallerTests(unittest.TestCase):
     def test_download_checks_versioned_chart(self):
         result,calls=self.run_installer(download=True)
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertTrue(any('https://github.com/Senan3188/KubeWeasel/releases/download/v0.1.0/kubeweasel-0.1.0.tgz' in c for c in calls))
+        self.assertTrue(any('https://github.com/Senan3188/KubeWeasel/releases/download/v0.2.0/kubeweasel-0.2.0.tgz' in c for c in calls))
     def test_readiness_failure_preserves_resources(self):
         result,calls=self.run_installer(FAIL_READY='1')
         self.assertNotEqual(result.returncode,0)

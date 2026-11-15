@@ -48,9 +48,9 @@ The installer uses your current Kubernetes context, prints the selected context 
 For a reviewable, pinned installation and explicit cluster selection:
 
 ```sh
-curl -fsSLo install.sh https://github.com/Senan3188/KubeWeasel/releases/download/v0.1.0/install.sh
+curl -fsSLo install.sh https://github.com/Senan3188/KubeWeasel/releases/download/v0.2.0/install.sh
 # Review install.sh before executing it.
-bash install.sh install --context YOUR_CONTEXT --namespace kubeweasel --version 0.1.0
+bash install.sh install --context YOUR_CONTEXT --namespace kubeweasel --version 0.2.0
 ```
 
 Use `--storage-class YOUR_CLASS` if the cluster has no default, and `--storage-size 2Gi` to choose the size of a new account volume. If optional cluster-level discovery/monitoring permissions are unavailable, use `--namespace-only` with namespace permissions and an existing namespace. This disables node monitoring and cluster-wide class/issuer discovery. In this mode the installer does not create a namespace; an administrator must create it and grant the namespace permissions first. The default installation grants namespace-scoped application mutations and optional read-only cluster monitoring/discovery roles.
@@ -66,9 +66,11 @@ For first-run setup, use the token in the dashboard pod's logs (the installer pr
 
 ```sh
 bash install.sh status --context YOUR_CONTEXT --namespace kubeweasel
-bash install.sh upgrade --context YOUR_CONTEXT --namespace kubeweasel --version 0.1.0
+bash install.sh upgrade --context YOUR_CONTEXT --namespace kubeweasel --version 0.2.0
 bash install.sh uninstall --context YOUR_CONTEXT --namespace kubeweasel
 ```
+
+Before upgrading from v0.1.0, back up the account SQLite database while the dashboard is stopped or using a SQLite-aware backup. v0.2.0 migrates existing project folders into the local cluster without changing their IDs. After connecting remote clusters, back up the matching `/data/kubeweasel.db.cluster-key` alongside the database; restore both together. See [release notes](docs/releases/0.2.0.md).
 
 Upgrade preserves the release's existing Helm values and account data. The dashboard uses a single-instance Recreate strategy for SQLite, so an upgrade briefly interrupts dashboard access. Application workloads keep running. Failed readiness checks leave resources in place and print inspection steps; use `upgrade` to retry a failed install. No automatic uninstall or namespace/data deletion is performed on failure.
 
@@ -79,18 +81,18 @@ Uninstall removes the dashboard and its permissions, **retaining the namespace, 
 Each GitHub release includes `kubeweasel-VERSION.tgz`, `install.sh`, and `SHA256SUMS`. Download and verify them from the [releases page](https://github.com/Senan3188/KubeWeasel/releases), then:
 
 ```sh
-helm upgrade --install kubeweasel ./kubeweasel-0.1.0.tgz \
+helm upgrade --install kubeweasel ./kubeweasel-0.2.0.tgz \
   --namespace kubeweasel --create-namespace --wait --timeout 8m
 kubectl -n kubeweasel port-forward deployment/kubeweasel 7878:7878
 ```
 
 For a direct Helm reinstall using a retained account volume, add `--set persistence.existingClaim=kubeweasel-data`. The installer handles this detection automatically. Advanced HTTPS reverse-proxy setup and optional discovery/monitoring controls are described below.
 
-For development, build an image with `docker build -t YOUR_REGISTRY/kubeweasel:0.1.0 .` and push it, or use the local Docker Desktop image store. The installer accepts `--chart charts/kubeweasel --image-repository YOUR_REGISTRY/kubeweasel --image-tag 0.1.0` for testing. These overrides do not download or verify the release chart.
+For development, build an image with `docker build -t YOUR_REGISTRY/kubeweasel:0.2.0 .` and push it, or use the local Docker Desktop image store. The installer accepts `--chart charts/kubeweasel --image-repository YOUR_REGISTRY/kubeweasel --image-tag 0.2.0` for testing. These overrides do not download or verify the release chart.
 
-## Multiple clusters (development source)
+## Multiple clusters
 
-Use the sidebar cluster selector to switch environments, and **Manage → Connect cluster** to add a connection. The current installation remains **Local cluster** and existing project IDs are preserved. This feature is in the development source; the immutable published v0.1.0 release does not include it yet.
+Use the sidebar cluster selector to switch environments, and **Manage → Connect cluster** to add a connection. The current installation remains **Local cluster** and existing project IDs are preserved. Multi-cluster connections and node management are included starting with v0.2.0.
 
 Each connection has a name, a fixed application namespace, and a self-contained kubeconfig. The API server must be reachable **from the dashboard server**. A localhost address inside an installed dashboard container refers to that container, not your laptop. Create the target namespace first. Use one connection per cluster/namespace; connecting the same namespace twice exposes the same workloads with separate folder metadata.
 
@@ -120,7 +122,7 @@ KUBEWEASEL_RUN_CLUSTERS_TEST=1 cargo test --locked \
 
 It creates two isolated namespaces, paused same-name applications and an unbound PVC, verifies restart/isolation/disconnect retention, then removes those test namespaces. It does not publish images or modify existing application resources.
 
-## Node management (development source)
+## Node management
 
 Open **Nodes** in the sidebar for the selected cluster. The list shows readiness, scheduling status, roles, Kubernetes version, node/VM details and live usage when Metrics Server is available. Open a node for conditions, addresses, labels, taints, pods across all namespaces and recent node events. Missing usage or event permissions do not masquerade as empty measurements.
 
@@ -128,7 +130,7 @@ Owner actions include **Cordon/Uncordon**, custom label/taint changes, and **Pre
 
 Drain previews every pod, requires typing the node name, and rechecks the preview on the server before cordoning. It uses the Kubernetes `policy/v1` Eviction API and preserves pod grace periods and disruption budgets. It skips DaemonSets, static mirror pods and completed pods, and blocks unmanaged/unsupported-controller pods, missing controllers, `emptyDir`, `hostPath` and generic ephemeral volumes. PVCs are never deleted, but storage topology can prevent replacements starting on another node. There is no force/delete-data option. The bounded operation reports accepted evictions, refusals and remaining/terminating pods; an incomplete drain leaves the node cordoned and must be inspected/retried. A completed drain means eligible pods left this node, not that replacement applications are healthy elsewhere. If the dashboard runs on this node, draining may interrupt the dashboard itself. Control-plane or single-node maintenance can interrupt services; do not shut down a node while the report is incomplete.
 
-Node actions affect the **whole cluster**, including workloads outside KubeWeasel's application namespace. They require additional Kubernetes permissions. Helm's read-only `nodeMonitoring` option is unchanged; mutation permissions are **disabled by default**. An administrator can enable them when installing/upgrading the development chart:
+Node actions affect the **whole cluster**, including workloads outside KubeWeasel's application namespace. They require additional Kubernetes permissions. Helm's read-only `nodeMonitoring` option is unchanged; mutation permissions are **disabled by default**. An administrator can enable them when installing/upgrading the chart:
 
 ```sh
 helm upgrade --install kubeweasel charts/kubeweasel --namespace kubeweasel \
@@ -160,7 +162,7 @@ node --check dashboard/dashboard.js
 - `state.rs`: shared state and demo initialization.
 - `http/`: route composition, authentication coverage, embedded assets, and request guards.
 - `applications/`: models, thin HTTP adapters, application services, and typed Kubernetes resource construction.
-- Feature modules (`auth`, `projects`, `settings`, `git`, `registry`, `storage`, `history`, `https`, `monitoring`, `diagnostics`): their respective capabilities, with explicit imports.
+- Feature modules (`clusters`, `nodes`, `auth`, `projects`, `settings`, `git`, `registry`, `storage`, `history`, `https`, `monitoring`, `diagnostics`): their respective capabilities, with explicit imports.
 - `workloads.rs`: shared Kubernetes ownership checks, updates, and concurrency/storage guards.
 - `error.rs` and `validation.rs`: common errors and pure validation.
 

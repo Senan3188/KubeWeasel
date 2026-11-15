@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # KubeWeasel installer: no sudo, no namespace deletion, no credential collection.
 set -euo pipefail
-VERSION=0.1.0
+VERSION=0.2.0
 REPOSITORY=Senan3188/KubeWeasel
 COMMAND=install
 NAMESPACE=kubeweasel
@@ -55,7 +55,7 @@ while [[ $# -gt 0 ]]; do
  esac
 done
 case "$COMMAND" in install|upgrade|status|open|uninstall) ;; *) fail "Unknown command: $COMMAND";; esac
-[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Version must be a stable version such as 0.1.0."
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Version must be a stable version such as 0.2.0."
 [[ "$NAMESPACE" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ && ${#NAMESPACE} -le 63 ]] || fail "Invalid namespace."
 [[ "$RELEASE" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ && ${#RELEASE} -le 53 ]] || fail "Invalid Helm release name."
 [[ "$LOCAL_PORT" =~ ^[0-9]+$ && ${#LOCAL_PORT} -le 5 ]] || fail "Invalid local port."
