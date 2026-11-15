@@ -13,9 +13,14 @@ import json, os, pathlib, sys
 args=sys.argv[1:]; tool=pathlib.Path(sys.argv[0]).name
 with open(os.environ['COMMAND_LOG'],'a') as f: f.write(json.dumps([tool]+args)+'\n')
 if tool=='helm':
- if 'version' in args: print('v3.17.3')
- elif 'show' in args: print('name: kubeweasel\nversion: 0.2.0')
- elif 'list' in args and os.environ.get('INSTALLED')=='1': print('kubeweasel')
+ if 'version' in args: print(os.environ.get('HELM_VERSION','v3.17.3'))
+ elif 'show' in args: print('name: kubeweasel\nversion: 0.2.1')
+ elif 'list' in args:
+  major=int(os.environ.get('HELM_VERSION','v3.17.3').split('.')[0][1:])
+  if major==4 and '--all' in args:
+   print('Error: unknown flag: --all',file=sys.stderr); sys.exit(1)
+  if os.environ.get('FAIL_LIST')=='1': print('Kubernetes API unavailable',file=sys.stderr); sys.exit(1)
+  if os.environ.get('INSTALLED')=='1' and (major==4 or '--all' in args): print('kubeweasel')
  elif 'get' in args: print('kind: PersistentVolumeClaim\nmetadata:\n  annotations:\n    helm.sh/resource-policy: '+os.environ.get('POLICY','keep'))
  elif 'upgrade' in args and os.environ.get('FAIL_READY')=='1': sys.exit(1)
 elif tool=='kubectl':
@@ -24,7 +29,7 @@ elif tool=='kubectl':
  elif 'pvc' in args and os.environ.get('CLAIM')=='1': print('persistentvolumeclaim/kubeweasel-data')
 elif tool=='curl':
  target=pathlib.Path(args[args.index('-o')+1]); url=args[args.index('-o')-1]
- if url.endswith('SHA256SUMS'): target.write_text(os.environ['CHECKSUM']+'  kubeweasel-0.2.0.tgz\n')
+ if url.endswith('SHA256SUMS'): target.write_text(os.environ['CHECKSUM']+'  kubeweasel-0.2.1.tgz\n')
  else: target.write_bytes(b'chart-fixture')
 '''
 
@@ -51,13 +56,35 @@ class InstallerTests(unittest.TestCase):
         result,calls=self.run_installer()
         self.assertEqual(result.returncode,0,result.stderr)
         upgrade=next(c for c in calls if c[0]=='helm' and 'upgrade' in c)
-        self.assertIn('--wait',upgrade); self.assertIn('image.tag=0.2.0',upgrade)
+        self.assertIn('--wait',upgrade); self.assertIn('image.tag=0.2.1',upgrade)
         self.assertIn('--create-namespace',upgrade)
         for c in calls:
             if c[0]=='kubectl': self.assertEqual(c[1:3],['--context','test-context'])
             if c[0]=='helm' and '--kube-context' in c: self.assertEqual(c[c.index('--kube-context')+1],'test-context')
         self.assertIn('127.0.0.1:7878',result.stdout)
         self.assertFalse(any('delete' in c for c in calls))
+    def test_helm3_lists_every_release_state(self):
+        result,calls=self.run_installer()
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('--all',next(c for c in calls if c[0]=='helm' and 'list' in c))
+    def test_helm4_install_omits_removed_all_flag(self):
+        result,calls=self.run_installer(HELM_VERSION='v4.3.1')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertNotIn('--all',next(c for c in calls if c[0]=='helm' and 'list' in c))
+    def test_helm4_detects_existing_release_and_preserves_upgrade_values(self):
+        result,calls=self.run_installer('upgrade',HELM_VERSION='v4.3.1',INSTALLED='1')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('--reuse-values',next(c for c in calls if 'upgrade' in c))
+    def test_helm4_existing_install_does_not_overwrite_release(self):
+        result,calls=self.run_installer(HELM_VERSION='v4.3.1',INSTALLED='1')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('Already installed',result.stdout)
+        self.assertFalse(any('upgrade' in c for c in calls))
+    def test_helm4_listing_failure_prevents_mutation(self):
+        result,calls=self.run_installer(HELM_VERSION='v4.3.1',FAIL_LIST='1')
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('Cannot inspect Helm releases',result.stderr)
+        self.assertFalse(any('upgrade' in c for c in calls))
     def test_namespace_only_does_not_require_namespace_creation(self):
         result,calls=self.run_installer(extra_args=['--namespace-only'])
         self.assertEqual(result.returncode,0,result.stderr)
@@ -89,7 +116,7 @@ class InstallerTests(unittest.TestCase):
     def test_download_checks_versioned_chart(self):
         result,calls=self.run_installer(download=True)
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertTrue(any('https://github.com/Senan3188/KubeWeasel/releases/download/v0.2.0/kubeweasel-0.2.0.tgz' in c for c in calls))
+        self.assertTrue(any('https://github.com/Senan3188/KubeWeasel/releases/download/v0.2.1/kubeweasel-0.2.1.tgz' in c for c in calls))
     def test_readiness_failure_preserves_resources(self):
         result,calls=self.run_installer(FAIL_READY='1')
         self.assertNotEqual(result.returncode,0)

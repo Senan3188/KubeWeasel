@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # KubeWeasel installer: no sudo, no namespace deletion, no credential collection.
 set -euo pipefail
-VERSION=0.2.0
+VERSION=0.2.1
 REPOSITORY=Senan3188/KubeWeasel
 COMMAND=install
 NAMESPACE=kubeweasel
@@ -55,7 +55,7 @@ while [[ $# -gt 0 ]]; do
  esac
 done
 case "$COMMAND" in install|upgrade|status|open|uninstall) ;; *) fail "Unknown command: $COMMAND";; esac
-[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Version must be a stable version such as 0.2.0."
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Version must be a stable version such as 0.2.1."
 [[ "$NAMESPACE" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ && ${#NAMESPACE} -le 63 ]] || fail "Invalid namespace."
 [[ "$RELEASE" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ && ${#RELEASE} -le 53 ]] || fail "Invalid Helm release name."
 [[ "$LOCAL_PORT" =~ ^[0-9]+$ && ${#LOCAL_PORT} -le 5 ]] || fail "Invalid local port."
@@ -63,7 +63,9 @@ case "$COMMAND" in install|upgrade|status|open|uninstall) ;; *) fail "Unknown co
 for program in kubectl helm; do command -v "$program" >/dev/null || fail "Install $program first, then run this installer again."; done
 HELM_VERSION=$(helm version --template '{{.Version}}')
 [[ "$HELM_VERSION" =~ ^v([0-9]+)\.([0-9]+) ]] || fail "Could not determine Helm version."
-(( BASH_REMATCH[1] >= 4 || (BASH_REMATCH[1] == 3 && BASH_REMATCH[2] >= 12) )) || fail "Helm 3.12 or newer is required."
+HELM_MAJOR=${BASH_REMATCH[1]}
+HELM_MINOR=${BASH_REMATCH[2]}
+(( HELM_MAJOR == 4 || (HELM_MAJOR == 3 && HELM_MINOR >= 12) )) || fail "Helm 3.12+ or Helm 4 is required."
 if [[ -z "$CONTEXT" ]]; then CONTEXT=$(kubectl config current-context) || fail "Select a Kubernetes context first."; fi
 [[ -n "$CONTEXT" ]] || fail "No Kubernetes context selected."
 K=(kubectl --context "$CONTEXT" --namespace "$NAMESPACE")
@@ -89,7 +91,11 @@ if [[ "$COMMAND" == uninstall ]]; then
 fi
 EXISTS=false
 # Listing releases detects API/permission failures rather than confusing them with absence.
-RELEASES=$("${H[@]}" list --all --short --filter "^${RELEASE}$") || fail "Cannot inspect Helm releases in this namespace."
+# Helm 3 needs --all for pending/uninstalled releases; Helm 4 lists all states
+# by default and removed that flag. Never interpret a listing error as absence.
+LIST_ARGS=(list --short --filter "^${RELEASE}$")
+if (( HELM_MAJOR == 3 )); then LIST_ARGS+=(--all); fi
+RELEASES=$("${H[@]}" "${LIST_ARGS[@]}") || fail "Cannot inspect Helm releases in this namespace."
 if [[ "$RELEASES" == "$RELEASE" ]]; then EXISTS=true; fi
 if [[ "$COMMAND" == install && "$EXISTS" == true ]]; then printf 'Already installed. Use upgrade to change versions.\n'; access; exit; fi
 if [[ "$COMMAND" == upgrade && "$EXISTS" == false ]]; then fail "Release not found. Use install first."; fi

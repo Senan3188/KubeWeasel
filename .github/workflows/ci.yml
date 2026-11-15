@@ -22,9 +22,20 @@ jobs:
           for file in dashboard/*.js; do node --check "$file"; done
           bash -n scripts/install.sh
           python3 -m unittest discover -s tests -p 'test_*.py'
+  helm:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        version: [v3.17.3, v4.3.1]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
         with:
-          version: v3.17.3
+          version: ${{ matrix.version }}
+      - name: Real Helm installer compatibility
+        env:
+          KUBEWEASEL_REAL_HELM_TEST: '1'
+        run: python3 -m unittest discover -s tests -p 'test_helm_compat.py'
       - name: Helm checks
         run: |
           helm lint charts/kubeweasel
