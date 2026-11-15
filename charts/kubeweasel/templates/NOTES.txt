@@ -1,5 +1,10 @@
+{{- $private := .Values.privateHttp | default dict -}}
 KubeWeasel is installed in {{ .Release.Namespace }}.
-{{- if .Values.publicOrigin }}
+{{- if $private.enabled }}
+Open {{ $private.origin }} directly from your trusted private/VPN network.
+No port-forward or SSH tunnel is needed. DNS must resolve to {{ $private.bindAddress }}.
+Allow TCP {{ $private.port }} only for trusted peers.
+{{- else if .Values.publicOrigin }}
 The dashboard expects HTTPS requests for {{ .Values.publicOrigin }} through your configured reverse proxy.
 {{- else }}
 Keep this local port-forward running:

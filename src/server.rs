@@ -4,10 +4,11 @@ pub(crate) async fn run() -> std::result::Result<(), Box<dyn std::error::Error>>
     if config.healthcheck {
         return health::check(&config).await;
     }
-    let auth = auth::AuthState::open(
+    let auth = auth::AuthState::open_with_private(
         &config.auth_db,
         &config.address,
         config.public_origin.clone(),
+        config.private_origin.clone(),
     )?;
     let state = AppState::initialize(&config).await?;
     let key_path = std::env::var("KUBEWEASEL_CLUSTER_KEY_FILE")

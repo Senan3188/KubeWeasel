@@ -1,0 +1,14 @@
+{{- $private := .Values.privateHttp | default dict -}}
+{{- if $private.enabled -}}
+{{- if .Values.publicOrigin -}}{{ fail "Choose privateHttp or publicOrigin, not both." }}{{- end -}}
+{{- if not (regexMatch "^http://[a-zA-Z0-9][a-zA-Z0-9.-]*:[0-9]+/?$" $private.origin) -}}{{ fail "privateHttp.origin must be http://HOST:PORT." }}{{- end -}}
+{{- if not $private.nodeName -}}{{ fail "privateHttp.nodeName is required." }}{{- end -}}
+{{- if or (lt (int $private.port) 1024) (gt (int $private.port) 65535) -}}{{ fail "privateHttp.port must be 1024–65535." }}{{- end -}}
+{{- $octets := splitList "." $private.bindAddress -}}
+{{- if ne (len $octets) 4 -}}{{ fail "privateHttp.bindAddress must be a private IPv4 address." }}{{- end -}}
+{{- range $octets -}}{{- if or (not (regexMatch "^[0-9]{1,3}$" .)) (gt (int .) 255) -}}{{ fail "Invalid private IPv4 address." }}{{- end -}}{{- end -}}
+{{- $first := int (index $octets 0) -}}{{- $second := int (index $octets 1) -}}
+{{- if not (or (eq $first 10) (and (eq $first 172) (ge $second 16) (le $second 31)) (and (eq $first 192) (eq $second 168)) (and (eq $first 100) (ge $second 64) (le $second 127))) -}}{{ fail "privateHttp.bindAddress must be RFC1918 or NetBird/CGNAT; wildcard/public addresses are rejected." }}{{- end -}}
+{{- $urlPort := trimSuffix "/" (trimPrefix ":" (regexFind ":[0-9]+/?$" $private.origin)) -}}
+{{- if ne (int $urlPort) (int $private.port) -}}{{ fail "privateHttp origin port must match privateHttp.port." }}{{- end -}}
+{{- end -}}

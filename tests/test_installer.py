@@ -14,7 +14,7 @@ args=sys.argv[1:]; tool=pathlib.Path(sys.argv[0]).name
 with open(os.environ['COMMAND_LOG'],'a') as f: f.write(json.dumps([tool]+args)+'\n')
 if tool=='helm':
  if 'version' in args: print(os.environ.get('HELM_VERSION','v3.17.3'))
- elif 'show' in args: print('name: kubeweasel\nversion: 0.2.1')
+ elif 'show' in args: print('name: kubeweasel\nversion: 0.3.0')
  elif 'list' in args:
   major=int(os.environ.get('HELM_VERSION','v3.17.3').split('.')[0][1:])
   if major==4 and '--all' in args:
@@ -26,10 +26,13 @@ if tool=='helm':
 elif tool=='kubectl':
  if 'current-context' in args: print('test-context')
  elif '/readyz' in args: print('ok')
+ elif 'nodes' in args: print(os.environ.get('NODE_ADDRESSES','node-one\t100.80.0.10'))
+ elif 'deployment' in args and any('KUBEWEASEL_PRIVATE_ORIGIN' in a for a in args): print(os.environ.get('ACCESS_URL',''))
+ elif 'deployment' in args and any('KUBEWEASEL_PUBLIC_ORIGIN' in a for a in args): print(os.environ.get('PUBLIC_URL',''))
  elif 'pvc' in args and os.environ.get('CLAIM')=='1': print('persistentvolumeclaim/kubeweasel-data')
 elif tool=='curl':
  target=pathlib.Path(args[args.index('-o')+1]); url=args[args.index('-o')-1]
- if url.endswith('SHA256SUMS'): target.write_text(os.environ['CHECKSUM']+'  kubeweasel-0.2.1.tgz\n')
+ if url.endswith('SHA256SUMS'): target.write_text(os.environ['CHECKSUM']+'  kubeweasel-0.3.0.tgz\n')
  else: target.write_bytes(b'chart-fixture')
 '''
 
@@ -56,13 +59,36 @@ class InstallerTests(unittest.TestCase):
         result,calls=self.run_installer()
         self.assertEqual(result.returncode,0,result.stderr)
         upgrade=next(c for c in calls if c[0]=='helm' and 'upgrade' in c)
-        self.assertIn('--wait',upgrade); self.assertIn('image.tag=0.2.1',upgrade)
+        self.assertIn('--wait',upgrade); self.assertIn('image.tag=0.3.0',upgrade)
         self.assertIn('--create-namespace',upgrade)
         for c in calls:
             if c[0]=='kubectl': self.assertEqual(c[1:3],['--context','test-context'])
             if c[0]=='helm' and '--kube-context' in c: self.assertEqual(c[c.index('--kube-context')+1],'test-context')
         self.assertIn('127.0.0.1:7878',result.stdout)
         self.assertFalse(any('delete' in c for c in calls))
+    def test_private_access_configures_gateway_and_prints_direct_url(self):
+        result,calls=self.run_installer(extra_args=['--private-http','http://deploy.example.internal:7878','--listen-address','100.80.0.10'],ACCESS_URL='http://deploy.example.internal:7878')
+        self.assertEqual(result.returncode,0,result.stderr)
+        upgrade=next(c for c in calls if 'upgrade' in c)
+        for value in ['privateHttp.enabled=true','privateHttp.nodeName=node-one','privateHttp.bindAddress=100.80.0.10','privateHttp.origin=http://deploy.example.internal:7878','privateHttp.port=7878']:
+            self.assertIn(value,upgrade)
+        self.assertIn('Dashboard ready: http://deploy.example.internal:7878',result.stdout)
+        self.assertNotIn('keep this command running',result.stdout)
+    def test_private_access_rejects_public_and_wildcard_addresses(self):
+        for address in ['0.0.0.0','8.8.8.8','100.63.0.1','100.128.0.1','192.168.1.999']:
+            result,calls=self.run_installer(extra_args=['--private-http','http://deploy.example.internal:7878','--listen-address',address])
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse(any('upgrade' in c for c in calls))
+    def test_private_access_rejects_missing_node_before_upgrade(self):
+        result,calls=self.run_installer(extra_args=['--private-http','http://deploy.example.internal:7878','--listen-address','100.80.0.10'],NODE_ADDRESSES='node-other\t100.80.0.20')
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('exactly one node',result.stderr)
+        self.assertFalse(any('upgrade' in c for c in calls))
+    def test_private_open_prints_saved_url_without_forwarding(self):
+        result,calls=self.run_installer('open',ACCESS_URL='http://deploy.example.internal:7878')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('Open http://deploy.example.internal:7878',result.stdout)
+        self.assertFalse(any('port-forward' in c for c in calls))
     def test_helm3_lists_every_release_state(self):
         result,calls=self.run_installer()
         self.assertEqual(result.returncode,0,result.stderr)
@@ -116,7 +142,7 @@ class InstallerTests(unittest.TestCase):
     def test_download_checks_versioned_chart(self):
         result,calls=self.run_installer(download=True)
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertTrue(any('https://github.com/Senan3188/KubeWeasel/releases/download/v0.2.1/kubeweasel-0.2.1.tgz' in c for c in calls))
+        self.assertTrue(any('https://github.com/Senan3188/KubeWeasel/releases/download/v0.3.0/kubeweasel-0.3.0.tgz' in c for c in calls))
     def test_readiness_failure_preserves_resources(self):
         result,calls=self.run_installer(FAIL_READY='1')
         self.assertNotEqual(result.returncode,0)

@@ -35,7 +35,7 @@ jobs:
       - name: Real Helm installer compatibility
         env:
           KUBEWEASEL_REAL_HELM_TEST: '1'
-        run: python3 -m unittest discover -s tests -p 'test_helm_compat.py'
+        run: python3 -m unittest discover -s tests -p 'test_helm*.py'
       - name: Helm checks
         run: |
           helm lint charts/kubeweasel
@@ -48,3 +48,34 @@ jobs:
           grep -q 'helm.sh/resource-policy: keep' /tmp/public.yaml
           grep -q 'claimName: "retained-data"' /tmp/reinstall.yaml
           if grep -q 'kind: PersistentVolumeClaim' /tmp/reinstall.yaml; then exit 1; fi
+  private-access:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
+        with:
+          version: v4.3.1
+      - name: Build test image
+        run: docker build -t kubeweasel:access-test .
+      - name: Create disposable two-node Kubernetes cluster
+        run: |
+          go install sigs.k8s.io/kind@v0.30.0
+          cat > /tmp/kind.yaml <<'CONFIG'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+            - role: control-plane
+            - role: worker
+          CONFIG
+          "$(go env GOPATH)/bin/kind" create cluster --name kubeweasel-access --config /tmp/kind.yaml --image kindest/node:v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a --wait 2m
+          # Account storage deliberately starts on the worker; gateway uses primary.
+          kubectl --context kind-kubeweasel-access taint nodes kubeweasel-access-control-plane node-role.kubernetes.io/control-plane:NoSchedule-
+          "$(go env GOPATH)/bin/kind" load docker-image kubeweasel:access-test --name kubeweasel-access
+      - name: Verify persistent direct access and old-release upgrade
+        env:
+          KUBEWEASEL_RUN_PRIVATE_ACCESS_TEST: '1'
+        run: python3 tests/live_private_access.py
+      - name: Remove disposable cluster
+        if: always()
+        run: '"$(go env GOPATH)/bin/kind" delete cluster --name kubeweasel-access'

@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/senan3188/kubeweasel
-  tag: "0.2.1"
+  tag: "0.3.0"
   pullPolicy: IfNotPresent
 # Read-only cluster-scoped ingress-class discovery for networking diagnostics.
 # Disable when an administrator does not grant cluster-scoped discovery.
@@ -12,6 +12,16 @@ nodeMonitoring: true
 nodeManagement: false
 # Set an HTTPS origin only when a reverse proxy terminates TLS for this host.
 publicOrigin: ""
+# Explicit direct access over a trusted private/VPN interface, never wildcard/public.
+# A small private gateway runs on the selected node; account storage stays in place.
+privateHttp:
+  enabled: false
+  origin: ""
+  bindAddress: ""
+  nodeName: ""
+  port: 7878
+  # Empty selects the pinned, public multi-architecture image in _helpers.tpl.
+  proxyImage: ""
 persistence:
   # Existing account PVC, for reinstalling without recreating account storage.
   existingClaim: ""

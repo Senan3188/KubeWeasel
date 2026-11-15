@@ -164,6 +164,7 @@ mod tests {
             address: "127.0.0.1:7878".into(),
             auth_db: ":memory:".into(),
             public_origin: None,
+            private_origin: None,
             namespace: "same".into(),
             demo: true,
             healthcheck: false,

@@ -83,30 +83,62 @@ fn session(headers: &HeaderMap, secure: bool) -> Option<String> {
         .find_map(|part| part.trim().strip_prefix(&format!("{key}=")))?;
     (s.len() == 64 && s.bytes().all(|c| c.is_ascii_hexdigit())).then(|| s.to_string())
 }
+fn private_bind(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => {
+            ip.is_loopback() || ip.is_private() || (u32::from(ip) & 0xffc00000 == 0x64400000)
+        }
+        std::net::IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local(),
+    }
+}
 impl AuthState {
+    #[cfg(test)]
     pub fn open(
         path: &str,
         address: &str,
         origin: Option<String>,
     ) -> std::result::Result<Self, Box<dyn std::error::Error>> {
+        Self::open_with_private(path, address, origin, None)
+    }
+    pub fn open_with_private(
+        path: &str,
+        address: &str,
+        origin: Option<String>,
+        private_origin: Option<String>,
+    ) -> std::result::Result<Self, Box<dyn std::error::Error>> {
+        if origin.is_some() && private_origin.is_some() {
+            return Err("Choose either an HTTPS public origin or an explicit private HTTP origin, not both.".into());
+        }
+        let private = private_origin.is_some();
         let bind: SocketAddr = address.parse()?;
         let mut origins = Vec::new();
         let mut hosts = Vec::new();
         let secure = origin.is_some();
-        if let Some(origin) = origin {
+        if private && !private_bind(bind.ip()) {
+            return Err("Private HTTP requires a specific loopback, RFC1918, NetBird/CGNAT or IPv6 ULA bind address. Wildcard and public addresses are rejected.".into());
+        }
+        if let Some(origin) = origin.or(private_origin) {
             let url = reqwest::Url::parse(&origin)?;
-            if url.scheme() != "https"
+            let expected_scheme = if private { "http" } else { "https" };
+            if url.scheme() != expected_scheme
                 || url.host_str().is_none()
                 || !url.username().is_empty()
                 || url.password().is_some()
                 || url.path() != "/"
                 || url.query().is_some()
                 || url.fragment().is_some()
+                || (private && url.port_or_known_default().is_none_or(|p| p < 1024))
             {
-                return Err("KUBEWEASEL_PUBLIC_ORIGIN must be an HTTPS origin, such as https://deploy.example.com".into());
+                return Err(if private {"KUBEWEASEL_PRIVATE_ORIGIN must be an HTTP origin with an explicit non-privileged port."} else {"KUBEWEASEL_PUBLIC_ORIGIN must be an HTTPS origin, such as https://deploy.example.com"}.into());
             }
             let origin = url.origin().ascii_serialization();
-            hosts.push(origin.trim_start_matches("https://").to_string());
+            hosts.push(
+                origin
+                    .split_once("://")
+                    .map(|(_, host)| host)
+                    .unwrap_or("")
+                    .to_string(),
+            );
             origins.push(origin);
         } else if !bind.ip().is_loopback() {
             return Err("Non-loopback binding requires KUBEWEASEL_PUBLIC_ORIGIN=https://your-dashboard-host. Configure HTTPS on your reverse proxy.".into());
@@ -684,6 +716,198 @@ mod tests {
                 .await
                 .status(),
             401
+        );
+    }
+    #[test]
+    fn private_http_requires_explicit_trusted_bind_and_valid_origin() {
+        for bind in [
+            "10.0.0.1:7878",
+            "172.16.0.1:7878",
+            "192.168.0.1:7878",
+            "100.73.0.1:7878",
+            "[fd00::1]:7878",
+        ] {
+            let s = AuthState::open_with_private(
+                ":memory:",
+                bind,
+                None,
+                Some("http://deploy.example.internal:7878".into()),
+            )
+            .unwrap();
+            assert!(!s.secure);
+            assert_eq!(s.hosts, vec!["deploy.example.internal:7878"]);
+            assert!(!s.set_cookie("example", 60).contains("; Secure"));
+            assert!(s.set_cookie("example", 60).contains("HttpOnly"));
+        }
+        for bind in [
+            "0.0.0.0:7878",
+            "[::]:7878",
+            "8.8.8.8:7878",
+            "100.63.0.1:7878",
+            "100.128.0.1:7878",
+        ] {
+            assert!(
+                AuthState::open_with_private(
+                    ":memory:",
+                    bind,
+                    None,
+                    Some("http://deploy.example.internal:7878".into())
+                )
+                .is_err()
+            );
+        }
+        for origin in [
+            "https://deploy.example.internal:7878",
+            "http://user:pass@deploy.example.internal:7878",
+            "http://deploy.example.internal:7878/path",
+            "http://deploy.example.internal:7878?query=1",
+            "http://deploy.example.internal",
+        ] {
+            assert!(
+                AuthState::open_with_private(
+                    ":memory:",
+                    "100.80.0.10:7878",
+                    None,
+                    Some(origin.into())
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            AuthState::open_with_private(
+                ":memory:",
+                "100.80.0.10:7878",
+                Some("https://deploy.example.test".into()),
+                Some("http://deploy.example.internal:7878".into())
+            )
+            .is_err()
+        );
+    }
+    #[tokio::test]
+    async fn private_http_preserves_owner_host_origin_and_csrf_guards() {
+        let s = AuthState::open_with_private(
+            ":memory:",
+            "100.80.0.10:7878",
+            None,
+            Some("http://deploy.example.internal:7878".into()),
+        )
+        .unwrap();
+        *s.setup_hash.lock().unwrap() = Some(digest("test-setup-token"));
+        let r = router(s);
+        async fn call(
+            r: &Router,
+            host: &str,
+            body: Option<Value>,
+            cookie: Option<&str>,
+            csrf: Option<&str>,
+            origin: Option<&str>,
+            setup: bool,
+        ) -> Response {
+            let mut request = HttpRequest::builder()
+                .uri(if setup {
+                    "/api/auth/setup"
+                } else {
+                    "/api/protected"
+                })
+                .header("host", host);
+            if let Some(cookie) = cookie {
+                request = request.header("cookie", cookie);
+            }
+            if let Some(csrf) = csrf {
+                request = request.header("x-kubeweasel-csrf", csrf);
+            }
+            if let Some(origin) = origin {
+                request = request.header("origin", origin);
+            }
+            let request = match body {
+                Some(body) => request
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-kubeweasel-request", "dashboard")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+                None => request.body(Body::empty()).unwrap(),
+            };
+            r.clone().oneshot(request).await.unwrap()
+        }
+        let host = "deploy.example.internal:7878";
+        let origin = "http://deploy.example.internal:7878";
+        assert_eq!(
+            call(&r, host, None, None, None, None, false).await.status(),
+            401
+        );
+        let response=call(&r,host,Some(json!({"email":"owner@example.test","password":"a-test-password-long-enough","setup_token":"test-setup-token"})),None,None,Some(origin),true).await;
+        assert_eq!(response.status(), 200);
+        assert!(!response.headers().contains_key("strict-transport-security"));
+        let cookie = response.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+        let csrf = value(response).await["csrf"].as_str().unwrap().to_string();
+        assert_eq!(
+            call(&r, host, None, Some(&cookie), None, None, false)
+                .await
+                .status(),
+            200
+        );
+        assert_eq!(
+            call(
+                &r,
+                "attacker.example:7878",
+                None,
+                Some(&cookie),
+                None,
+                None,
+                false
+            )
+            .await
+            .status(),
+            403
+        );
+        assert_eq!(
+            call(
+                &r,
+                host,
+                Some(json!({})),
+                Some(&cookie),
+                None,
+                Some(origin),
+                false
+            )
+            .await
+            .status(),
+            403
+        );
+        assert_eq!(
+            call(
+                &r,
+                host,
+                Some(json!({})),
+                Some(&cookie),
+                Some(&csrf),
+                Some("http://attacker.example:7878"),
+                false
+            )
+            .await
+            .status(),
+            403
+        );
+        assert_eq!(
+            call(
+                &r,
+                host,
+                Some(json!({})),
+                Some(&cookie),
+                Some(&csrf),
+                Some(origin),
+                false
+            )
+            .await
+            .status(),
+            200
         );
     }
     #[test]

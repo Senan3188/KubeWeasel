@@ -88,6 +88,7 @@ async fn connections_persist_and_disconnect_preserves_workloads_and_volumes() {
         address: "127.0.0.1:7878".into(),
         auth_db: db.to_str().unwrap().into(),
         public_origin: None,
+        private_origin: None,
         namespace: "kubeweasel-test".into(),
         demo: false,
         healthcheck: false,

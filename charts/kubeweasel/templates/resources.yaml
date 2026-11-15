@@ -1,3 +1,4 @@
+{{- $private := .Values.privateHttp | default dict -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -69,6 +70,7 @@ spec:
         app: {{ .Release.Name }}
     spec:
       serviceAccountName: {{ .Release.Name }}
+
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -78,13 +80,23 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            {{- if $private.enabled }}
+            - name: KUBEWEASEL_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- end }}
             - name: KUBEWEASEL_BIND
-              value: {{ if .Values.publicOrigin }}"0.0.0.0:7878"{{ else }}"127.0.0.1:7878"{{ end }}
+              value: {{ if $private.enabled }}"$(KUBEWEASEL_POD_IP):7878"{{ else if .Values.publicOrigin }}"0.0.0.0:7878"{{ else }}"127.0.0.1:7878"{{ end }}
             - name: KUBEWEASEL_AUTH_DB
               value: "/data/kubeweasel.db"
             {{- if .Values.publicOrigin }}
             - name: KUBEWEASEL_PUBLIC_ORIGIN
               value: {{ .Values.publicOrigin | quote }}
+            {{- end }}
+            {{- if $private.enabled }}
+            - name: KUBEWEASEL_PRIVATE_ORIGIN
+              value: {{ $private.origin | quote }}
             {{- end }}
             - name: KUBEWEASEL_NAMESPACE
               valueFrom:

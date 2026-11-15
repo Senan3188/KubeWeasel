@@ -37,7 +37,7 @@ Deployment names must be lowercase DNS labels of at most 63 characters. New appl
 
 ## Install from the command line
 
-Installer v0.2.1 supports both Helm 3.12+ and Helm 4; it selects the correct release-listing flags for each version.
+Installer v0.3.0 supports both Helm 3.12+ and Helm 4; it selects the correct release-listing flags for each version.
 
 Requires a running Kubernetes cluster, `kubectl`, Helm 3.12+ (or Helm 4), Bash, curl, and a default StorageClass (or a class you choose). No Rust or Docker installation is needed on the user's computer. The release image supports Linux AMD64 and ARM64.
 
@@ -45,14 +45,27 @@ Requires a running Kubernetes cluster, `kubectl`, Helm 3.12+ (or Helm 4), Bash, 
 curl -fsSL https://github.com/Senan3188/KubeWeasel/releases/latest/download/install.sh | bash
 ```
 
+For direct access on a trusted private network or VPN, choose the dashboard URL and the node's private IP:
+
+```sh
+curl -fsSLo install.sh https://github.com/Senan3188/KubeWeasel/releases/download/v0.3.0/install.sh
+bash install.sh install \
+  --private-http http://deploy.example.internal:7878 \
+  --listen-address 100.73.28.50
+```
+
+Open the printed URL after installation. It keeps working after the terminal closes and after pod restarts. Point your DNS name at the chosen IP and allow TCP 7878 through your private-network policy. For an existing installation, use `upgrade` with the same two options; the owner account and application data stay in place. Future upgrades preserve these settings. Reinstalling after uninstall requires the same access options again.
+
+This explicit HTTP mode is for a trusted LAN or an encrypted VPN such as NetBird. It requires an RFC1918 or CGNAT IPv4 address matching one node's InternalIP and a free port from 1024–65535. A small gateway binds only that node address; the dashboard and its account volume stay on their existing node. The gateway uses host networking, so cluster admission policies must allow it. Host/Origin checks, owner login and CSRF protection still apply. Use the HTTPS reverse-proxy configuration below for internet access. Without access options, the installer keeps local port-forward access.
+
 The installer uses your current Kubernetes context, prints the selected context and namespace, downloads the versioned Helm chart, verifies its SHA-256 checksum, and waits for account storage and dashboard readiness. It does not install Kubernetes, Helm, ingress controllers, Metrics Server, or cert-manager. Default access stays local through Kubernetes port-forwarding; it does not expose a public dashboard. The release's published checksum detects a corrupt/mismatched chart; it is not independent verification of a compromised release publisher.
 
 For a reviewable, pinned installation and explicit cluster selection:
 
 ```sh
-curl -fsSLo install.sh https://github.com/Senan3188/KubeWeasel/releases/download/v0.2.1/install.sh
+curl -fsSLo install.sh https://github.com/Senan3188/KubeWeasel/releases/download/v0.3.0/install.sh
 # Review install.sh before executing it.
-bash install.sh install --context YOUR_CONTEXT --namespace kubeweasel --version 0.2.1
+bash install.sh install --context YOUR_CONTEXT --namespace kubeweasel --version 0.3.0
 ```
 
 Use `--storage-class YOUR_CLASS` if the cluster has no default, and `--storage-size 2Gi` to choose the size of a new account volume. If optional cluster-level discovery/monitoring permissions are unavailable, use `--namespace-only` with namespace permissions and an existing namespace. This disables node monitoring and cluster-wide class/issuer discovery. In this mode the installer does not create a namespace; an administrator must create it and grant the namespace permissions first. The default installation grants namespace-scoped application mutations and optional read-only cluster monitoring/discovery roles.
@@ -68,11 +81,11 @@ For first-run setup, use the token in the dashboard pod's logs (the installer pr
 
 ```sh
 bash install.sh status --context YOUR_CONTEXT --namespace kubeweasel
-bash install.sh upgrade --context YOUR_CONTEXT --namespace kubeweasel --version 0.2.1
+bash install.sh upgrade --context YOUR_CONTEXT --namespace kubeweasel --version 0.3.0
 bash install.sh uninstall --context YOUR_CONTEXT --namespace kubeweasel
 ```
 
-Before upgrading from v0.1.0, back up the account SQLite database while the dashboard is stopped or using a SQLite-aware backup. v0.2.1 migrates existing project folders into the local cluster without changing their IDs. After connecting remote clusters, back up the matching `/data/kubeweasel.db.cluster-key` alongside the database; restore both together. See [release notes](docs/releases/0.2.1.md).
+Before upgrading from v0.1.0, back up the account SQLite database while the dashboard is stopped or using a SQLite-aware backup. v0.3.0 migrates existing project folders into the local cluster without changing their IDs. After connecting remote clusters, back up the matching `/data/kubeweasel.db.cluster-key` alongside the database; restore both together. See [release notes](docs/releases/0.3.0.md).
 
 Upgrade preserves the release's existing Helm values and account data. The dashboard uses a single-instance Recreate strategy for SQLite, so an upgrade briefly interrupts dashboard access. Application workloads keep running. Failed readiness checks leave resources in place and print inspection steps; use `upgrade` to retry a failed install. No automatic uninstall or namespace/data deletion is performed on failure.
 
@@ -83,18 +96,18 @@ Uninstall removes the dashboard and its permissions, **retaining the namespace, 
 Each GitHub release includes `kubeweasel-VERSION.tgz`, `install.sh`, and `SHA256SUMS`. Download and verify them from the [releases page](https://github.com/Senan3188/KubeWeasel/releases), then:
 
 ```sh
-helm upgrade --install kubeweasel ./kubeweasel-0.2.1.tgz \
+helm upgrade --install kubeweasel ./kubeweasel-0.3.0.tgz \
   --namespace kubeweasel --create-namespace --wait --timeout 8m
 kubectl -n kubeweasel port-forward deployment/kubeweasel 7878:7878
 ```
 
 For a direct Helm reinstall using a retained account volume, add `--set persistence.existingClaim=kubeweasel-data`. The installer handles this detection automatically. Advanced HTTPS reverse-proxy setup and optional discovery/monitoring controls are described below.
 
-For development, build an image with `docker build -t YOUR_REGISTRY/kubeweasel:0.2.1 .` and push it, or use the local Docker Desktop image store. The installer accepts `--chart charts/kubeweasel --image-repository YOUR_REGISTRY/kubeweasel --image-tag 0.2.1` for testing. These overrides do not download or verify the release chart.
+For development, build an image with `docker build -t YOUR_REGISTRY/kubeweasel:0.3.0 .` and push it, or use the local Docker Desktop image store. The installer accepts `--chart charts/kubeweasel --image-repository YOUR_REGISTRY/kubeweasel --image-tag 0.3.0` for testing. These overrides do not download or verify the release chart.
 
 ## Multiple clusters
 
-Use the sidebar cluster selector to switch environments, and **Manage → Connect cluster** to add a connection. The current installation remains **Local cluster** and existing project IDs are preserved. Multi-cluster connections and node management are included starting with v0.2.0. Helm 4 users should use installer v0.2.1 or newer.
+Use the sidebar cluster selector to switch environments, and **Manage → Connect cluster** to add a connection. The current installation remains **Local cluster** and existing project IDs are preserved. Multi-cluster connections and node management are included starting with v0.2.0. Helm 4 support starts with installer v0.2.1; direct private access requires v0.3.0 or newer.
 
 Each connection has a name, a fixed application namespace, and a self-contained kubeconfig. The API server must be reachable **from the dashboard server**. A localhost address inside an installed dashboard container refers to that container, not your laptop. Create the target namespace first. Use one connection per cluster/namespace; connecting the same namespace twice exposes the same workloads with separate folder metadata.
 
@@ -245,7 +258,7 @@ KUBEWEASEL_AUTH_DB=/data/kubeweasel.db \
 kubeweasel
 ```
 
-KubeWeasel does not terminate TLS itself. Keep the HTTP backend private to the proxy. Non-loopback binding without an HTTPS public origin is rejected. HTTPS deployments use Secure `__Host-` session cookies and HSTS; local loopback HTTP uses a separate non-Secure development cookie. Allowed Host and Origin values are checked explicitly. Setting `publicOrigin` in Helm enables a ClusterIP Service on port 7878 for your HTTPS proxy; the default remains local port-forward access. Choose `persistence.size` and `persistence.storageClass` for the account volume.
+KubeWeasel does not terminate TLS itself. Keep the HTTP backend private to the proxy. Non-loopback binding requires an HTTPS public origin or the explicit trusted-network HTTP configuration. Private HTTP uses `KUBEWEASEL_PRIVATE_ORIGIN=http://HOST:PORT` with a specific private bind IP; wildcard and public bind addresses are rejected in that mode. HTTPS deployments use Secure `__Host-` session cookies and HSTS; loopback and explicit private HTTP use a separate non-Secure HttpOnly SameSite=Strict cookie and do not send HSTS. Private HTTP does not encrypt traffic itself. Allowed Host and Origin values are checked explicitly. Setting `publicOrigin` in Helm enables a ClusterIP Service on port 7878 for your HTTPS proxy; the default remains local port-forward access. Choose `persistence.size` and `persistence.storageClass` for the account volume.
 
 Opt-in Python live checks now require `KUBEWEASEL_SESSION_COOKIE` in the test process environment, containing an authenticated owner cookie. They fetch the session CSRF token automatically and never print credentials. Never commit this cookie or store it in shell history. Unit tests exercise signup, duplicate-owner rejection, login/logout, session revocation/expiry, rate limiting, CSRF, and cross-origin rejection without creating your real account.
 

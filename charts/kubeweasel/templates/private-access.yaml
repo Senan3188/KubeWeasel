@@ -1,0 +1,121 @@
+{{- $private := .Values.privateHttp | default dict -}}
+{{- if $private.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-access
+data:
+  nginx.conf: |
+    worker_processes 1;
+    pid /tmp/nginx.pid;
+    error_log /dev/stderr warn;
+    events { worker_connections 256; }
+    http {
+      access_log off;
+      client_body_temp_path /tmp/client_temp;
+      proxy_temp_path /tmp/proxy_temp;
+      client_max_body_size 2m;
+      server {
+        listen {{ $private.bindAddress }}:{{ $private.port }};
+        server_name _;
+        location / {
+          proxy_pass http://{{ .Release.Name }}.{{ .Release.Namespace }}.svc.cluster.local:7878;
+          proxy_http_version 1.1;
+          proxy_set_header Host $http_host;
+          proxy_set_header Connection "";
+          proxy_connect_timeout 5s;
+          proxy_read_timeout 90s;
+          proxy_buffering off;
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-access
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-access
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-access
+      annotations:
+        kubeweasel.io/private-url: {{ $private.origin | quote }}
+        checksum/config: {{ printf "%s|%v|%s|%s" $private.bindAddress $private.port .Release.Name .Release.Namespace | sha256sum }}
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchFields:
+                  - key: metadata.name
+                    operator: In
+                    values: [{{ $private.nodeName | quote }}]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+      containers:
+        - name: access
+          image: {{ include "kubeweasel.privateProxyImage" . | quote }}
+          command: [nginx]
+          args: [-g, "daemon off;"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: configuration
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: temporary
+              mountPath: /tmp
+          startupProbe:
+            httpGet:
+              host: {{ $private.bindAddress | quote }}
+              port: {{ $private.port }}
+              path: /healthz
+              httpHeaders:
+                - name: Host
+                  value: {{ trimSuffix "/" (trimPrefix "http://" $private.origin) | quote }}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              host: {{ $private.bindAddress | quote }}
+              port: {{ $private.port }}
+              path: /healthz
+              httpHeaders:
+                - name: Host
+                  value: {{ trimSuffix "/" (trimPrefix "http://" $private.origin) | quote }}
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+              ephemeral-storage: 8Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+              ephemeral-storage: 64Mi
+      volumes:
+        - name: configuration
+          configMap:
+            name: {{ .Release.Name }}-access
+        - name: temporary
+          emptyDir:
+            sizeLimit: 32Mi
+{{- end }}
