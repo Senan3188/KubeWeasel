@@ -488,6 +488,7 @@ mod tests {
     }
     fn router(s: AuthState) -> Router {
         let app = AppState {
+            build_gate: Default::default(),
             client: None,
             namespace: "test".into(),
             apps: Arc::new(RwLock::new(BTreeMap::new())),

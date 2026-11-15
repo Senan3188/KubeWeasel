@@ -6,3 +6,7 @@ target
 .env
 .env.*
 data
+
+*.cluster-key
+
+remote-kubeconfig.*

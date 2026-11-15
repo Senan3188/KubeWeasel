@@ -1,6 +1,7 @@
 //! KubeWeasel server and feature modules.
 mod applications;
 mod auth;
+mod clusters;
 mod config;
 mod diagnostics;
 mod error;
@@ -10,6 +11,7 @@ mod history;
 mod http;
 mod https;
 mod monitoring;
+mod nodes;
 mod projects;
 mod registry;
 mod server;

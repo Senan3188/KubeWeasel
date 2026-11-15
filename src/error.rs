@@ -7,6 +7,12 @@ use serde_json::json;
 
 #[derive(Debug)]
 pub(crate) struct Error(pub(crate) StatusCode, pub(crate) String);
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.1)
+    }
+}
+impl std::error::Error for Error {}
 impl Error {
     pub(crate) fn not_found(message: impl Into<String>) -> Self {
         Self(StatusCode::NOT_FOUND, message.into())

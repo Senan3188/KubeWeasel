@@ -11,6 +11,10 @@ fn javascript(contents: &'static str) -> MethodRouter<AppState> {
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route(
+            "/nodes.js",
+            javascript(include_str!("../../dashboard/nodes.js")),
+        )
+        .route(
             "/",
             get(|| async { Html(include_str!("../../dashboard/index.html")) }),
         )
@@ -22,6 +26,10 @@ pub(super) fn routes() -> Router<AppState> {
                     include_str!("../../dashboard/dashboard.css"),
                 )
             }),
+        )
+        .route(
+            "/clusters.js",
+            javascript(include_str!("../../dashboard/clusters.js")),
         )
         .route(
             "/dashboard.js",

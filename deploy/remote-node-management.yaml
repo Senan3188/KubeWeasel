@@ -1,0 +1,37 @@
+# Optional mutation permissions affecting ALL namespaces; review before applying.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeweasel-remote-node-management
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, patch]
+  - apiGroups: [""]
+    resources: [pods, events]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [replicationcontrollers]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [replicasets, statefulsets]
+    verbs: [get]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [pods/eviction]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeweasel-remote-node-management
+subjects:
+  - kind: ServiceAccount
+    name: kubeweasel-remote
+    namespace: kubeweasel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeweasel-remote-node-management

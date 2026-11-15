@@ -1,7 +1,6 @@
 use crate::{
     applications::{self, models::Deploy},
     error::{Error, Result, invalid},
-    git,
     http::request::mutation,
     state::AppState,
     validation::validate,
@@ -172,7 +171,7 @@ async fn update(
     Json(input): Json<UpdateInput>,
 ) -> Result<Json<Value>> {
     mutation(&headers)?;
-    let _gate = git::GATE.lock().await;
+    let _gate = s.build_gate.lock().await;
     let (image, host) = image_reference(&input.registry, &input.image)?;
     if input.username.is_empty() != input.token.is_empty()
         || input.username.len() > 200
@@ -283,7 +282,7 @@ mod live_tests {
             .await
             .unwrap();
         let result:std::result::Result<(),Box<dyn std::error::Error>>=async {
-            let s=AppState{client:Some(client),namespace:ns.clone(),apps:Arc::new(RwLock::new(BTreeMap::new())),settings:settings::SettingsState::default(),storage:storage::StorageState::default(),projects:projects::Store::open(":memory:")?};
+            let s=AppState{build_gate:Default::default(),client:Some(client),namespace:ns.clone(),apps:Arc::new(RwLock::new(BTreeMap::new())),settings:settings::SettingsState::default(),storage:storage::StorageState::default(),projects:projects::Store::open(":memory:")?};
             let mut headers=HeaderMap::new();headers.insert("x-kubeweasel-request","dashboard".parse()?);
             applications::service::deploy(&s, Deploy{workload_kind:"Deployment".into(),project_id:None,name:"source-check".into(),image:"nginx:stable".into(),port:8080,replicas:0}).await.map_err(|e|e.1)?;
             let w=managed(&s,"source-check").await.map_err(|e|e.1)?;

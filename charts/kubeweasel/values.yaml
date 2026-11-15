@@ -7,6 +7,9 @@ image:
 ingressClassDiscovery: true
 # Optional read-only cluster view: node capacity, node usage, all-pod reservations.
 nodeMonitoring: true
+# Optional cluster-wide node scheduling, metadata and PDB-respecting pod eviction.
+# This can disrupt workloads across namespaces; disabled by default.
+nodeManagement: false
 # Set an HTTPS origin only when a reverse proxy terminates TLS for this host.
 publicOrigin: ""
 persistence:

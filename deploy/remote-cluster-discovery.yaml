@@ -1,0 +1,91 @@
+# Optional cluster-wide READ permissions. Review before applying.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeweasel-remote-discovery-0
+rules:
+  - apiGroups: [""]
+    resources: [nodes, pods]
+    verbs: [get, list]
+  - apiGroups: [metrics.k8s.io]
+    resources: [nodes]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeweasel-remote-discovery-0
+subjects:
+  - kind: ServiceAccount
+    name: kubeweasel-remote
+    namespace: kubeweasel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeweasel-remote-discovery-0
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeweasel-remote-discovery-1
+rules:
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeweasel-remote-discovery-1
+subjects:
+  - kind: ServiceAccount
+    name: kubeweasel-remote
+    namespace: kubeweasel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeweasel-remote-discovery-1
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeweasel-remote-discovery-2
+rules:
+  - apiGroups: [networking.k8s.io]
+    resources: [ingressclasses]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeweasel-remote-discovery-2
+subjects:
+  - kind: ServiceAccount
+    name: kubeweasel-remote
+    namespace: kubeweasel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeweasel-remote-discovery-2
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeweasel-remote-discovery-3
+rules:
+  - apiGroups: [cert-manager.io]
+    resources: [clusterissuers]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeweasel-remote-discovery-3
+subjects:
+  - kind: ServiceAccount
+    name: kubeweasel-remote
+    namespace: kubeweasel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeweasel-remote-discovery-3

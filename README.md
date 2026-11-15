@@ -88,11 +88,62 @@ For a direct Helm reinstall using a retained account volume, add `--set persiste
 
 For development, build an image with `docker build -t YOUR_REGISTRY/kubeweasel:0.1.0 .` and push it, or use the local Docker Desktop image store. The installer accepts `--chart charts/kubeweasel --image-repository YOUR_REGISTRY/kubeweasel --image-tag 0.1.0` for testing. These overrides do not download or verify the release chart.
 
+## Multiple clusters (development source)
+
+Use the sidebar cluster selector to switch environments, and **Manage → Connect cluster** to add a connection. The current installation remains **Local cluster** and existing project IDs are preserved. This feature is in the development source; the immutable published v0.1.0 release does not include it yet.
+
+Each connection has a name, a fixed application namespace, and a self-contained kubeconfig. The API server must be reachable **from the dashboard server**. A localhost address inside an installed dashboard container refers to that container, not your laptop. Create the target namespace first. Use one connection per cluster/namespace; connecting the same namespace twice exposes the same workloads with separate folder metadata.
+
+Choose a file or paste the kubeconfig, optionally choose its context, and run **Test connection**. The report distinguishes API/TLS connectivity from individual Kubernetes permissions. Missing metrics, storage provisioners, ingress controllers or cert-manager are reported by their respective features; connecting does not install them. Uploaded configurations require HTTPS with certificate validation and embedded CA/token or client certificate/key data. Exec plugins, auth providers, file references, impersonation, proxy URLs and disabled TLS verification are rejected, including in unused contexts.
+
+For a namespace-limited service account, apply the example permissions on the **remote** cluster, then create an expiring connection file:
+
+```sh
+kubectl --context REMOTE_CONTEXT create namespace kubeweasel
+kubectl --context REMOTE_CONTEXT -n kubeweasel apply -f deploy/remote-cluster-rbac.yaml
+python3 scripts/cluster-kubeconfig.py --context REMOTE_CONTEXT \
+  --namespace kubeweasel --output remote-kubeconfig.json
+```
+
+The helper uses an embedded CA and a one-hour service-account token by default, writes a private file, and never prints the token. Upload the file, then remove it securely according to your operating practices. Use **Edit → Replacement kubeconfig** before token expiry to rotate credentials. A cluster administrator can choose a different duration, subject to the API server's token policy. The namespace role cannot create namespaces or inspect nodes/cluster-wide classes/issuers; optional read-only discovery permissions are in `deploy/remote-cluster-discovery.yaml`. Review them before applying. Do not use cluster-admin credentials for normal operation.
+
+Project creation chooses a cluster; existing projects cannot move between clusters. Application settings, deployments, logs, monitoring, domains, storage, registry credentials, builds and rollback operate on the selected connection. Cluster selection is included in browser URLs and only the connection ID is saved in browser storage. Builds and rollout observers resume for saved connections after restart. Disconnect waits for active dashboard requests, stops connection workers and temporary forwards, and removes saved credentials. It leaves remote namespaces, workloads and volumes untouched. Project folder records remain in the account database but are no longer accessible through that removed connection; a newly added connection gets a new ID. Back up before disconnecting if you need to recover folder organization.
+
+Saved kubeconfigs are encrypted with AES-256-GCM in the account database. The random encryption key defaults to `KUBEWEASEL_AUTH_DB.cluster-key` (for Helm, `/data/kubeweasel.db.cluster-key`); override with `KUBEWEASEL_CLUSTER_KEY_FILE`. On Unix the key must have owner-only permissions. **Back up the SQLite database and its matching key together**, keeping both private. A database-only copy cannot decrypt connections, and encryption does not protect against someone who obtains the database and key. A missing/wrong key causes startup to fail without replacing credentials. The existing Helm account volume persists both files. One owner has full access to every connection; this is not tenant isolation.
+
+Opt-in local lifecycle check (Docker Desktop context only):
+
+```sh
+KUBEWEASEL_RUN_CLUSTERS_TEST=1 cargo test --locked \
+  clusters::live_tests::connections_persist_and_disconnect_preserves_workloads_and_volumes -- --ignored
+```
+
+It creates two isolated namespaces, paused same-name applications and an unbound PVC, verifies restart/isolation/disconnect retention, then removes those test namespaces. It does not publish images or modify existing application resources.
+
+## Node management (development source)
+
+Open **Nodes** in the sidebar for the selected cluster. The list shows readiness, scheduling status, roles, Kubernetes version, node/VM details and live usage when Metrics Server is available. Open a node for conditions, addresses, labels, taints, pods across all namespaces and recent node events. Missing usage or event permissions do not masquerade as empty measurements.
+
+Owner actions include **Cordon/Uncordon**, custom label/taint changes, and **Preview drain**. Cordon prevents ordinary new scheduling while existing pods continue running. System labels and taints under Kubernetes domains are read-only. A `NoExecute` custom taint can evict existing pods; review its explicit confirmation before applying it. Operations check node UID and resource version, so stale pages cannot silently overwrite concurrent changes.
+
+Drain previews every pod, requires typing the node name, and rechecks the preview on the server before cordoning. It uses the Kubernetes `policy/v1` Eviction API and preserves pod grace periods and disruption budgets. It skips DaemonSets, static mirror pods and completed pods, and blocks unmanaged/unsupported-controller pods, missing controllers, `emptyDir`, `hostPath` and generic ephemeral volumes. PVCs are never deleted, but storage topology can prevent replacements starting on another node. There is no force/delete-data option. The bounded operation reports accepted evictions, refusals and remaining/terminating pods; an incomplete drain leaves the node cordoned and must be inspected/retried. A completed drain means eligible pods left this node, not that replacement applications are healthy elsewhere. If the dashboard runs on this node, draining may interrupt the dashboard itself. Control-plane or single-node maintenance can interrupt services; do not shut down a node while the report is incomplete.
+
+Node actions affect the **whole cluster**, including workloads outside KubeWeasel's application namespace. They require additional Kubernetes permissions. Helm's read-only `nodeMonitoring` option is unchanged; mutation permissions are **disabled by default**. An administrator can enable them when installing/upgrading the development chart:
+
+```sh
+helm upgrade --install kubeweasel charts/kubeweasel --namespace kubeweasel \
+  --reuse-values --set nodeManagement=true
+```
+
+For an existing remote connection service account, review and apply `deploy/remote-node-management.yaml` on that remote cluster (edit its subject namespace/name if different). This grants node get/list/patch, all-namespace pod/event reads, standard workload-controller reads, and pod eviction creation; it does not grant node deletion, pod deletion, Secret reads or VM access. Namespace-only installer mode explicitly disables this role. Cluster administrators using a broader kubeconfig may already have these permissions. The connection test reports node mutation and drain capabilities separately from monitoring.
+
+Adding machines, cloud autoscaling, SSH, reboot and VM deletion remain the responsibility of your Kubernetes/cloud provider. This screen administers Kubernetes node state.
+
 ## Access model and current limits
 
 This version supports one owner account with full access, without teams or project-specific permissions. `KUBEWEASEL_BIND` defaults to `127.0.0.1:7878`. Every application API requires an owner session. Mutation requests also require a session-bound CSRF token and reject unexpected origins. Public access requires an HTTPS reverse proxy and KUBEWEASEL_PUBLIC_ORIGIN; see owner setup below.
 
-This release does not yet implement private Git repository access, automatic deployment webhooks, project-level permissions or environments, secrets editing, a custom-resource controller, or multi-cluster support. Existing cluster networking, registry credentials, and admission policies still apply. Health indicates replica readiness; it is not an application-level health probe. Cluster changes occur when you deploy, scale, restart, or save application settings through the UI.
+This release does not yet implement private Git repository access, automatic deployment webhooks, project-level permissions or environments, secrets editing, or a custom-resource controller. Existing cluster networking, registry credentials, and admission policies still apply. Health indicates replica readiness; it is not an application-level health probe. Cluster changes occur when you deploy, scale, restart, or save application settings through the UI.
 
 ## Development
 

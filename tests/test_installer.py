@@ -64,6 +64,7 @@ class InstallerTests(unittest.TestCase):
         upgrade=next(c for c in calls if 'upgrade' in c)
         self.assertNotIn('--create-namespace',upgrade)
         self.assertIn('nodeMonitoring=false',upgrade)
+        self.assertIn('nodeManagement=false',upgrade)
     def test_upgrade_preserves_values(self):
         result,calls=self.run_installer('upgrade',INSTALLED='1')
         self.assertEqual(result.returncode,0,result.stderr)

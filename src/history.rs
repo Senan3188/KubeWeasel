@@ -6,7 +6,6 @@ use crate::{
 };
 use crate::{
     error::{Result, invalid},
-    git,
     http::request::mutation,
     state::AppState,
     workloads::{self, LABEL, managed},
@@ -397,7 +396,7 @@ async fn rollback(
     Json(input): Json<Rollback>,
 ) -> Result<Json<Value>> {
     mutation(&headers)?;
-    let _gate = git::GATE.lock().await;
+    let _gate = s.build_gate.lock().await;
     let entry = snapshot(&s, &name)
         .await?
         .into_iter()
@@ -409,7 +408,7 @@ async fn rollback(
     w.patch(&name,&PatchParams::default(),&Patch::Strategic(json!({"metadata":{"annotations":{"kubeweasel.io/rollback-from":entry.id,"kubeweasel.io/git-source":null,"kubeweasel.io/build-job":null,"kubeweasel.io/build-status":null,"kubeweasel.io/build-message":null}},"spec":{"template":{"spec":{"imagePullSecrets":pulls,"containers":[{"name":"app","image":entry.resolved_image.unwrap_or(entry.image)}]}}}}))).await?;
     Ok(Json(json!({"ok":true})))
 }
-pub fn worker(s: AppState) {
+pub fn worker(s: AppState) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             if let Some(client) = s.client.clone()
@@ -421,7 +420,7 @@ pub fn worker(s: AppState) {
             }
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
-    });
+    })
 }
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -532,7 +531,7 @@ mod live_tests {
             .await
             .unwrap();
         let result:std::result::Result<(),Box<dyn std::error::Error>>=async{
-   let s=AppState{client:Some(client.clone()),namespace:ns.clone(),apps:Arc::new(RwLock::new(BTreeMap::new())),settings:settings::SettingsState::default(),storage:storage::StorageState::default(),projects:projects::Store::open(":memory:")?};let mut headers=HeaderMap::new();headers.insert("x-kubeweasel-request","dashboard".parse()?);
+   let s=AppState{build_gate:Default::default(),client:Some(client.clone()),namespace:ns.clone(),apps:Arc::new(RwLock::new(BTreeMap::new())),settings:settings::SettingsState::default(),storage:storage::StorageState::default(),projects:projects::Store::open(":memory:")?};let mut headers=HeaderMap::new();headers.insert("x-kubeweasel-request","dashboard".parse()?);
    applications::service::deploy(&s, Deploy{workload_kind:"Deployment".into(),project_id:None,name:"history-check".into(),image:"nginx:alpine".into(),port:80,replicas:1}).await.map_err(|e|e.1)?;
    let pvc:PersistentVolumeClaim=serde_json::from_value(json!({"apiVersion":"v1","kind":"PersistentVolumeClaim","metadata":{"name":"keep-data"},"spec":{"accessModes":["ReadWriteOnce"],"resources":{"requests":{"storage":"1Gi"}}}}))?;let claims:Api<PersistentVolumeClaim>=Api::namespaced(client.clone(),&ns);let original_claim=claims.create(&PostParams::default(),&pvc).await?;
    let w=managed(&s,"history-check").await.map_err(|e|e.1)?;

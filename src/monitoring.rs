@@ -14,7 +14,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/monitoring", get(snapshot))
         .route("/api/monitoring/nodes", get(nodes))
 }
-fn quantity(value: &str, cpu: bool) -> Option<f64> {
+pub(crate) fn quantity(value: &str, cpu: bool) -> Option<f64> {
     let suffixes: &[(&str, f64)] = if cpu {
         &[("n", 1e-9), ("u", 1e-6), ("m", 1e-3)]
     } else {

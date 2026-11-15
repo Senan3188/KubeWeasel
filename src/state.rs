@@ -5,6 +5,7 @@ use tokio::sync::RwLock;
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) client: Option<Client>,
+    pub(crate) build_gate: Arc<tokio::sync::Mutex<()>>,
     pub(crate) namespace: String,
     pub(crate) apps: Arc<RwLock<BTreeMap<String, App>>>,
     pub(crate) settings: settings::SettingsState,
@@ -42,6 +43,7 @@ impl AppState {
             }
         }
         Ok(Self {
+            build_gate: Default::default(),
             client,
             namespace: config.namespace.clone(),
             apps: Arc::new(RwLock::new(apps)),

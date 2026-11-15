@@ -31,11 +31,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 #[cfg(test)]
 use std::{collections::BTreeMap, sync::Arc};
-use tokio::sync::Mutex;
 #[cfg(test)]
 use tokio::sync::RwLock;
 
-pub(crate) static GATE: Mutex<()> = Mutex::const_new(());
 const SOURCE: &str = "kubeweasel.io/git-source";
 const BUILD: &str = "kubeweasel.io/build-job";
 const STATUS: &str = "kubeweasel.io/build-status";
@@ -218,7 +216,7 @@ async fn start(
     headers: HeaderMap,
 ) -> Result<Json<Value>> {
     mutation(&headers)?;
-    let _gate = GATE.lock().await;
+    let _gate = s.build_gate.lock().await;
     let host = validate_source(&input.source)?;
     let client = s.client.clone().ok_or_else(|| {
         invalid("Git builds require a live Kubernetes cluster; demo mode does not build images.")
@@ -442,7 +440,7 @@ async fn inspect(State(s): State<AppState>, Path(name): Path<String>) -> Result<
     Ok(Json(result))
 }
 async fn reconcile(s: &AppState) -> Result<()> {
-    let _gate = GATE.lock().await;
+    let _gate = s.build_gate.lock().await;
     let Some(client) = s.client.clone() else {
         return Ok(());
     };
@@ -504,7 +502,7 @@ async fn reconcile(s: &AppState) -> Result<()> {
     }
     Ok(())
 }
-pub fn worker(s: AppState) {
+pub fn worker(s: AppState) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             if let Err(e) = reconcile(&s).await {
@@ -512,7 +510,7 @@ pub fn worker(s: AppState) {
             }
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
-    });
+    })
 }
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -617,7 +615,7 @@ mod live_tests {
         .unwrap();
         namespaces.create(&PostParams::default(), &n).await.unwrap();
         let result:std::result::Result<(),Box<dyn std::error::Error>>=async {
-            let s=AppState{client:Some(client.clone()),namespace:ns.clone(),apps:Arc::new(RwLock::new(BTreeMap::new())),settings:settings::SettingsState::default(),storage:storage::StorageState::default(),projects:projects::Store::open(":memory:")?};
+            let s=AppState{build_gate:Default::default(),client:Some(client.clone()),namespace:ns.clone(),apps:Arc::new(RwLock::new(BTreeMap::new())),settings:settings::SettingsState::default(),storage:storage::StorageState::default(),projects:projects::Store::open(":memory:")?};
             let mut headers=HeaderMap::new();headers.insert("x-kubeweasel-request","dashboard".parse()?);
             applications::service::deploy(&s, Deploy{workload_kind:"Deployment".into(),project_id:None,name:"git-check".into(),image:"busybox:1.36".into(),port:8080,replicas:0}).await.map_err(|e|e.1)?;
             let workload=managed(&s,"git-check").await.map_err(|e|e.1)?;

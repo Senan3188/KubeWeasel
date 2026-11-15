@@ -1,0 +1,55 @@
+# Apply with kubectl -n kubeweasel; create that namespace first.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubeweasel-remote
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kubeweasel-remote
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, create]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets]
+    verbs: [get, list, create, patch]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, create, patch]
+  - apiGroups: [""]
+    resources: [pods, pods/log]
+    verbs: [get, list]
+  - apiGroups: [cert-manager.io]
+    resources: [certificates, issuers]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list, create]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: ["networking.k8s.io"]
+    resources: [ingresses]
+    verbs: [get, create, patch, delete]
+  - apiGroups: [""]
+    resources: [pods/portforward]
+    verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kubeweasel-remote
+subjects:
+  - kind: ServiceAccount
+    name: kubeweasel-remote
+    namespace: kubeweasel
+roleRef:
+  kind: Role
+  name: kubeweasel-remote
+  apiGroup: rbac.authorization.k8s.io
+

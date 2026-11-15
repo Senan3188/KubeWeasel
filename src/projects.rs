@@ -30,10 +30,12 @@ pub const PROJECT_LABEL: &str = "kubeweasel.io/project";
 #[derive(Clone)]
 pub struct Store {
     db: Arc<Mutex<Connection>>,
+    cluster_id: String,
     pub gate: Arc<tokio::sync::Mutex<()>>,
 }
 #[derive(Clone, Serialize)]
 struct Project {
+    cluster_id: String,
     id: String,
     name: String,
     description: String,
@@ -69,20 +71,49 @@ fn validate_project(p: &ProjectInput) -> Result<()> {
 }
 impl Store {
     pub fn open(path: &str) -> std::result::Result<Self, Box<dyn std::error::Error>> {
-        let db = Connection::open(path)?;
+        let mut db = Connection::open(path)?;
         db.busy_timeout(std::time::Duration::from_secs(5))?;
-        db.execute_batch("CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,namespace TEXT NOT NULL,name TEXT NOT NULL,description TEXT NOT NULL,UNIQUE(namespace,name COLLATE NOCASE));")?;
+        let exists: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='projects')",
+            [],
+            |r| r.get(0),
+        )?;
+        let legacy = exists
+            && !db
+                .prepare("PRAGMA table_info(projects)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+                .iter()
+                .any(|c| c == "cluster_id");
+        let tx = db.transaction()?;
+        if legacy {
+            tx.execute_batch("ALTER TABLE projects RENAME TO projects_before_clusters;")?;
+        }
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,cluster_id TEXT NOT NULL DEFAULT 'local',namespace TEXT NOT NULL,name TEXT NOT NULL,description TEXT NOT NULL,UNIQUE(cluster_id,namespace,name COLLATE NOCASE));")?;
+        if legacy {
+            tx.execute_batch("INSERT INTO projects(id,cluster_id,namespace,name,description) SELECT id,'local',namespace,name,description FROM projects_before_clusters; DROP TABLE projects_before_clusters;")?;
+        }
+        tx.commit()?;
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
+            cluster_id: "local".into(),
             gate: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
+    pub(crate) fn for_cluster(&self, id: &str) -> Self {
+        Self {
+            db: self.db.clone(),
+            gate: self.gate.clone(),
+            cluster_id: id.into(),
+        }
+    }
     fn list(&self, ns: &str) -> Result<Vec<Project>> {
         let db = self.db.lock().map_err(|_| storage())?;
-        let mut statement=db.prepare("SELECT id,name,description FROM projects WHERE namespace=?1 ORDER BY name COLLATE NOCASE").map_err(|_|storage())?;
+        let mut statement=db.prepare("SELECT id,name,description FROM projects WHERE namespace=?1 AND cluster_id=?2 ORDER BY name COLLATE NOCASE").map_err(|_|storage())?;
         statement
-            .query_map([ns], |r| {
+            .query_map(params![ns, self.cluster_id], |r| {
                 Ok(Project {
+                    cluster_id: self.cluster_id.clone(),
                     id: r.get(0)?,
                     name: r.get(1)?,
                     description: r.get(2)?,
@@ -99,8 +130,8 @@ impl Store {
                 .lock()
                 .map_err(|_| storage())?
                 .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM projects WHERE namespace=?1 AND id=?2)",
-                    params![ns, id],
+                    "SELECT EXISTS(SELECT 1 FROM projects WHERE namespace=?1 AND id=?2 AND cluster_id=?3)",
+                    params![ns, id, self.cluster_id],
                     |r| r.get(0),
                 )
                 .map_err(|_| storage())?;
@@ -120,29 +151,30 @@ impl Store {
         });
         let name = input.name.trim().to_string();
         let db = self.db.lock().map_err(|_| storage())?;
-        let result = if id_exists(&db, ns, &id)? {
+        let result = if id_exists(&db, ns, &id, &self.cluster_id)? {
             db.execute(
-                "UPDATE projects SET name=?1,description=?2 WHERE namespace=?3 AND id=?4",
-                params![name, input.description, ns, id],
+                "UPDATE projects SET name=?1,description=?2 WHERE namespace=?3 AND id=?4 AND cluster_id=?5",
+                params![name, input.description, ns, id,self.cluster_id],
             )
         } else {
             db.execute(
-                "INSERT INTO projects(id,namespace,name,description) VALUES(?1,?2,?3,?4)",
-                params![id, ns, name, input.description],
+                "INSERT INTO projects(id,namespace,name,description,cluster_id) VALUES(?1,?2,?3,?4,?5)",
+                params![id, ns, name, input.description,self.cluster_id],
             )
         };
         result.map_err(|e|if matches!(e,rusqlite::Error::SqliteFailure(ref error,_)if error.code==rusqlite::ErrorCode::ConstraintViolation){Error(StatusCode::CONFLICT,"A project with this name already exists.".into())}else{storage()})?;
         Ok(Project {
+            cluster_id: self.cluster_id.clone(),
             id,
             name,
             description: input.description,
         })
     }
 }
-fn id_exists(db: &Connection, ns: &str, id: &str) -> Result<bool> {
+fn id_exists(db: &Connection, ns: &str, id: &str, cluster_id: &str) -> Result<bool> {
     db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM projects WHERE namespace=?1 AND id=?2)",
-        params![ns, id],
+        "SELECT EXISTS(SELECT 1 FROM projects WHERE namespace=?1 AND id=?2 AND cluster_id=?3)",
+        params![ns, id, cluster_id],
         |r| r.get(0),
     )
     .optional()
@@ -215,8 +247,8 @@ async fn remove(
         .lock()
         .map_err(|_| storage())?
         .execute(
-            "DELETE FROM projects WHERE namespace=?1 AND id=?2",
-            params![s.namespace, id],
+            "DELETE FROM projects WHERE namespace=?1 AND id=?2 AND cluster_id=?3",
+            params![s.namespace, id, s.projects.cluster_id],
         )
         .map_err(|_| storage())?;
     Ok(Json(json!({"ok":true})))
@@ -298,6 +330,41 @@ mod tests {
         );
     }
     #[test]
+    fn migration_preserves_ids_and_clusters_isolate_identical_namespaces() {
+        let path = std::env::temp_dir().join(format!("kw-migration-{}.db", std::process::id()));
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE projects(id TEXT PRIMARY KEY, namespace TEXT NOT NULL,name TEXT NOT NULL,description TEXT NOT NULL,UNIQUE(namespace,name COLLATE NOCASE)); INSERT INTO projects VALUES('existing','same','Website','Preserve me');").unwrap();
+        drop(db);
+        let local = Store::open(path.to_str().unwrap()).unwrap();
+        let remote = local.for_cluster("remote");
+        assert_eq!(local.list("same").unwrap()[0].id, "existing");
+        assert_eq!(local.list("same").unwrap()[0].cluster_id, "local");
+        assert!(remote.list("same").unwrap().is_empty());
+        assert!(remote.require("same", Some("existing")).is_err());
+        let other = remote
+            .save(
+                "same",
+                None,
+                ProjectInput {
+                    name: "Website".into(),
+                    description: String::new(),
+                },
+            )
+            .unwrap();
+        assert!(local.require("same", Some(&other.id)).is_err());
+        assert_eq!(local.list("same").unwrap().len(), 1);
+        assert_eq!(remote.list("same").unwrap().len(), 1);
+        drop(remote);
+        drop(local);
+        let reopened = Store::open(path.to_str().unwrap()).unwrap();
+        assert_eq!(
+            reopened.for_cluster("remote").list("same").unwrap()[0].id,
+            other.id
+        );
+        drop(reopened);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
     fn project_persists_on_reopen() {
         let path =
             std::env::temp_dir().join(format!("kubeweasel-project-{}.db", std::process::id()));
@@ -328,6 +395,7 @@ mod lifecycle_tests {
     async fn assignment_deploy_and_nonempty_deletion() {
         let store = Store::open(":memory:").unwrap();
         let s = AppState {
+            build_gate: Default::default(),
             client: None,
             namespace: "test".into(),
             apps: Arc::new(RwLock::new(BTreeMap::new())),

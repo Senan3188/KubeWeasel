@@ -37,6 +37,9 @@ pub struct SettingsState {
     forwards: Arc<Mutex<BTreeMap<String, Forward>>>,
 }
 impl SettingsState {
+    pub(crate) async fn stop_all_forwards(&self) {
+        self.forwards.lock().await.clear();
+    }
     pub async fn initialize_demo(&self, app: &App, port: u16) {
         let mut config = defaults(app);
         config.port = port;

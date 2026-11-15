@@ -115,7 +115,7 @@ ARGS=(upgrade --install "$RELEASE" "$CHART" --wait --timeout "$TIMEOUT")
 if [[ "$NAMESPACE_ONLY" == false ]]; then ARGS+=(--create-namespace); fi
 if [[ "$EXISTS" == true ]]; then ARGS+=(--reuse-values); fi
 ARGS+=(--set-string "image.repository=$IMAGE" --set-string "image.tag=${IMAGE_TAG:-$VERSION}")
-if [[ "$NAMESPACE_ONLY" == true ]]; then ARGS+=(--set ingressClassDiscovery=false --set nodeMonitoring=false --set storageClassDiscovery=false --set clusterIssuerDiscovery=false); fi
+if [[ "$NAMESPACE_ONLY" == true ]]; then ARGS+=(--set ingressClassDiscovery=false --set nodeMonitoring=false --set nodeManagement=false --set storageClassDiscovery=false --set clusterIssuerDiscovery=false); fi
 if [[ "$EXISTS" == false ]]; then
  CLAIM=$("${K[@]}" get pvc "$RELEASE-data" --ignore-not-found -o name) || fail "Cannot inspect account storage."
  if [[ -n "$CLAIM" ]]; then

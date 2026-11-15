@@ -10,9 +10,25 @@ pub(crate) async fn run() -> std::result::Result<(), Box<dyn std::error::Error>>
         config.public_origin.clone(),
     )?;
     let state = AppState::initialize(&config).await?;
-    git::worker(state.clone());
-    history::worker(state.clone());
-    let router = http::router(state, auth);
+    let key_path = std::env::var("KUBEWEASEL_CLUSTER_KEY_FILE")
+        .unwrap_or_else(|_| format!("{}.cluster-key", config.auth_db));
+    let manager = crate::clusters::Manager::open(
+        state.clone(),
+        if config.demo {
+            ":memory:"
+        } else {
+            &config.auth_db
+        },
+        if config.demo {
+            None
+        } else {
+            Some(std::path::Path::new(&key_path))
+        },
+    )?;
+    manager.resume().await;
+    let _git_worker = git::worker(state.clone());
+    let _history_worker = history::worker(state.clone());
+    let router = http::router_with_clusters(state, auth, manager);
     let listener = tokio::net::TcpListener::bind(&config.address).await?;
     println!(
         "KubeWeasel → http://{} ({})",

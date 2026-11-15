@@ -21,7 +21,7 @@ jobs:
         run: |
           for file in dashboard/*.js; do node --check "$file"; done
           bash -n scripts/install.sh
-          python3 -m unittest discover -s tests -p 'test_installer.py'
+          python3 -m unittest discover -s tests -p 'test_*.py'
       - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
         with:
           version: v3.17.3
@@ -29,8 +29,11 @@ jobs:
         run: |
           helm lint charts/kubeweasel
           helm template kubeweasel charts/kubeweasel --set publicOrigin=https://kubeweasel.example.com > /tmp/public.yaml
-          helm template kubeweasel charts/kubeweasel --set ingressClassDiscovery=false,nodeMonitoring=false,storageClassDiscovery=false,clusterIssuerDiscovery=false > /tmp/minimal.yaml
+          helm template kubeweasel charts/kubeweasel --set ingressClassDiscovery=false,nodeMonitoring=false,storageClassDiscovery=false,clusterIssuerDiscovery=false,nodeManagement=false > /tmp/minimal.yaml
           helm template kubeweasel charts/kubeweasel --set persistence.existingClaim=retained-data > /tmp/reinstall.yaml
+          helm template kubeweasel charts/kubeweasel --set nodeManagement=true > /tmp/nodes.yaml
+          grep -q 'pods/eviction' /tmp/nodes.yaml
+          if grep -q 'pods/eviction' /tmp/minimal.yaml; then exit 1; fi
           grep -q 'helm.sh/resource-policy: keep' /tmp/public.yaml
           grep -q 'claimName: "retained-data"' /tmp/reinstall.yaml
           if grep -q 'kind: PersistentVolumeClaim' /tmp/reinstall.yaml; then exit 1; fi

@@ -12,3 +12,7 @@ __pycache__/
 *.db-shm
 *.db-wal
 /data/
+
+*.cluster-key
+
+remote-kubeconfig.*

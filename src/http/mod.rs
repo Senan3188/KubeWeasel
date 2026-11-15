@@ -2,12 +2,12 @@
 mod assets;
 pub(crate) mod request;
 use crate::{
-    applications, auth, diagnostics, git, history, https, monitoring, projects, registry, settings,
-    state::AppState, storage,
+    applications, auth, diagnostics, git, history, https, monitoring, nodes, projects, registry,
+    settings, state::AppState, storage,
 };
 use axum::{Router, routing::get};
-pub(crate) fn router(state: AppState, auth: auth::AuthState) -> Router {
-    assets::routes()
+pub(crate) fn features() -> Router<AppState> {
+    Router::new()
         .merge(applications::routes())
         .merge(settings::routes())
         .merge(storage::routes())
@@ -15,13 +15,28 @@ pub(crate) fn router(state: AppState, auth: auth::AuthState) -> Router {
         .merge(diagnostics::routes())
         .merge(https::routes())
         .merge(monitoring::routes())
+        .merge(nodes::routes())
         .merge(registry::routes())
         .merge(git::routes())
         .merge(history::routes())
+}
+pub(crate) fn router_with_clusters(
+    state: AppState,
+    auth: auth::AuthState,
+    manager: crate::clusters::Manager,
+) -> Router {
+    assets::routes()
+        .merge(features())
+        .merge(crate::clusters::routes(manager))
         .route("/healthz", get(|| async { "ok" }))
         .merge(auth::routes(auth.clone()))
         .layer(axum::middleware::from_fn_with_state(auth, auth::guard))
         .with_state(state)
+}
+#[cfg(test)]
+pub(crate) fn router(state: AppState, auth: auth::AuthState) -> Router {
+    let manager = crate::clusters::Manager::open(state.clone(), ":memory:", None).unwrap();
+    router_with_clusters(state, auth, manager)
 }
 
 #[cfg(test)]
@@ -113,7 +128,13 @@ mod tests {
             StatusCode::OK
         );
         for path in [
+            "/api/nodes",
+            "/api/clusters/local/nodes",
+            "/api/clusters/local/nodes/worker/drain-preview",
             "/api/overview",
+            "/api/clusters",
+            "/api/clusters/local/overview",
+            "/api/clusters/local/apps/web/config",
             "/api/projects",
             "/api/monitoring",
             "/api/monitoring/nodes",
@@ -155,6 +176,58 @@ mod tests {
             .unwrap()
             .to_string();
         let session = Some((cookie.as_str(), csrf.as_str()));
+        assert_eq!(
+            request(
+                &app,
+                "/api/clusters/local/nodes/worker",
+                Some(json!({"uid":"u","resource_version":"1","action":"cordon"})),
+                Some((&cookie, ""))
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            request(
+                &app,
+                "/api/clusters/local/nodes/worker",
+                Some(json!({"uid":"u","resource_version":"1","action":"cordon"})),
+                session
+            )
+            .await
+            .status(),
+            StatusCode::BAD_REQUEST
+        );
+        let clusters = json_body(request(&app, "/api/clusters", None, session).await).await;
+        assert_eq!(clusters["clusters"][0]["id"], "local");
+        assert_eq!(
+            request(
+                &app,
+                "/api/clusters/local",
+                Some(json!({"name":"Renamed"})),
+                Some((&cookie, ""))
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            request(
+                &app,
+                "/api/clusters/local",
+                Some(json!({"name":"Renamed"})),
+                session
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            request(&app, "/api/clusters/unknown/overview", None, session)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
         let deployment =
             json!({"name":"smoke-app","image":"nginx:stable","port":8080,"replicas":1});
         assert_eq!(
@@ -177,7 +250,7 @@ mod tests {
         assert_eq!(
             request(
                 &app,
-                "/api/apps/smoke-app/scale",
+                "/api/clusters/local/apps/smoke-app/scale",
                 Some(json!({"replicas":0})),
                 session
             )
@@ -196,8 +269,16 @@ mod tests {
             .status(),
             StatusCode::OK
         );
-        let config =
-            json_body(request(&app, "/api/apps/smoke-app/config", None, session).await).await;
+        let config = json_body(
+            request(
+                &app,
+                "/api/clusters/local/apps/smoke-app/config",
+                None,
+                session,
+            )
+            .await,
+        )
+        .await;
         assert_eq!(config["config"]["image"], "ghcr.io/owner/web:v1");
         assert_eq!(config["config"]["replicas"], 0);
         assert_eq!(config["config"]["port"], 8080);
