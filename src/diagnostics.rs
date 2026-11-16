@@ -7,7 +7,7 @@ use crate::{
 };
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
     routing::{get, post},
 };
@@ -87,9 +87,13 @@ fn dns_check(result: &std::result::Result<Vec<IpAddr>, String>) -> Check {
         ),
     }
 }
-async fn diagnostics(State(s): State<AppState>, Path(name): Path<String>) -> Result<Json<Value>> {
+async fn diagnostics(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Query(selection): Query<settings::domains::Selection>,
+) -> Result<Json<Value>> {
     let cfg = settings::load(&s, &name).await?;
-    let d = &cfg.domain;
+    let d = settings::domains::selected(&cfg, selection.domain.as_deref())?;
     if s.client.is_none() {
         return Ok(Json(
             json!({"demo":true,"checks":[check("demo","Demo workspace","info","Diagnostics need a live Kubernetes connection.")],"host":d.host}),
@@ -207,7 +211,7 @@ async fn diagnostics(State(s): State<AppState>, Path(name): Path<String>) -> Res
         ));
     } else {
         let ingresses: Api<Ingress> = Api::namespaced(client, &s.namespace);
-        match ingresses.get_opt(&name).await {
+        match ingresses.get_opt(&d.id).await {
             Ok(Some(i)) => {
                 addresses = i
                     .status
@@ -250,6 +254,8 @@ async fn diagnostics(State(s): State<AppState>, Path(name): Path<String>) -> Res
 }
 #[derive(Deserialize)]
 struct TestRequest {
+    #[serde(default)]
+    domain: Option<String>,
     port: u16,
     #[serde(default)]
     local: bool,
@@ -284,15 +290,16 @@ async fn test_connection(
             "Connection tests need a live Kubernetes connection.",
         ));
     }
-    if cfg.domain.host.is_empty() {
+    let domain = settings::domains::selected(&cfg, t.domain.as_deref())?;
+    if domain.host.is_empty() {
         return Err(invalid("Save a hostname before testing."));
     }
     if t.port == 0 {
         return Err(invalid("Port must be 1–65535."));
     }
-    let host = &cfg.domain.host;
-    let https = !cfg.domain.tls_secret.is_empty();
-    let url = test_url(host, &cfg.domain.path, https, t.port).map_err(|e| invalid(&e))?;
+    let host = &domain.host;
+    let https = !domain.tls_secret.is_empty();
+    let url = test_url(host, &domain.path, https, t.port).map_err(|e| invalid(&e))?;
     let result = dns(host).await;
     let mut builder = reqwest::Client::builder()
         .no_proxy()

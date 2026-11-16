@@ -37,7 +37,7 @@ Deployment names must be lowercase DNS labels of at most 63 characters. New appl
 
 ## Install from the command line
 
-Installer v0.3.1 supports both Helm 3.12+ and Helm 4; it selects the correct release-listing flags for each version.
+Installer v0.4.0 supports both Helm 3.12+ and Helm 4; it selects the correct release-listing flags for each version.
 
 Requires a running Kubernetes cluster, `kubectl`, Helm 3.12+ (or Helm 4), Bash, curl, and a default StorageClass (or a class you choose). No Rust or Docker installation is needed on the user's computer. The release image supports Linux AMD64 and ARM64.
 
@@ -48,7 +48,7 @@ curl -fsSL https://github.com/Senan3188/KubeWeasel/releases/latest/download/inst
 For direct access on a trusted private network or VPN, choose the dashboard URL and the node's private IP:
 
 ```sh
-curl -fsSLo install.sh https://github.com/Senan3188/KubeWeasel/releases/download/v0.3.1/install.sh
+curl -fsSLo install.sh https://github.com/Senan3188/KubeWeasel/releases/download/v0.4.0/install.sh
 bash install.sh install \
   --private-http http://deploy.example.internal:7878 \
   --listen-address 100.73.28.50
@@ -63,9 +63,9 @@ The installer uses your current Kubernetes context, prints the selected context 
 For a reviewable, pinned installation and explicit cluster selection:
 
 ```sh
-curl -fsSLo install.sh https://github.com/Senan3188/KubeWeasel/releases/download/v0.3.1/install.sh
+curl -fsSLo install.sh https://github.com/Senan3188/KubeWeasel/releases/download/v0.4.0/install.sh
 # Review install.sh before executing it.
-bash install.sh install --context YOUR_CONTEXT --namespace kubeweasel --version 0.3.1
+bash install.sh install --context YOUR_CONTEXT --namespace kubeweasel --version 0.4.0
 ```
 
 Use `--storage-class YOUR_CLASS` if the cluster has no default, and `--storage-size 2Gi` to choose the size of a new account volume. If optional cluster-level discovery/monitoring permissions are unavailable, use `--namespace-only` with namespace permissions and an existing namespace. This disables node monitoring and cluster-wide class/issuer discovery. In this mode the installer does not create a namespace; an administrator must create it and grant the namespace permissions first. The default installation grants namespace-scoped application mutations and optional read-only cluster monitoring/discovery roles.
@@ -81,11 +81,11 @@ For first-run setup, use the token in the dashboard pod's logs (the installer pr
 
 ```sh
 bash install.sh status --context YOUR_CONTEXT --namespace kubeweasel
-bash install.sh upgrade --context YOUR_CONTEXT --namespace kubeweasel --version 0.3.1
+bash install.sh upgrade --context YOUR_CONTEXT --namespace kubeweasel --version 0.4.0
 bash install.sh uninstall --context YOUR_CONTEXT --namespace kubeweasel
 ```
 
-Before upgrading from v0.1.0, back up the account SQLite database while the dashboard is stopped or using a SQLite-aware backup. v0.3.1 migrates existing project folders into the local cluster without changing their IDs. After connecting remote clusters, back up the matching `/data/kubeweasel.db.cluster-key` alongside the database; restore both together. See [release notes](docs/releases/0.3.1.md).
+Before upgrading from v0.1.0, back up the account SQLite database while the dashboard is stopped or using a SQLite-aware backup. v0.4.0 migrates existing project folders into the local cluster without changing their IDs. After connecting remote clusters, back up the matching `/data/kubeweasel.db.cluster-key` alongside the database; restore both together. See [release notes](docs/releases/0.4.0.md).
 
 Upgrade preserves the release's existing Helm values and account data. The dashboard uses a single-instance Recreate strategy for SQLite, so an upgrade briefly interrupts dashboard access. Application workloads keep running. Failed readiness checks leave resources in place and print inspection steps; use `upgrade` to retry a failed install. No automatic uninstall or namespace/data deletion is performed on failure.
 
@@ -96,18 +96,18 @@ Uninstall removes the dashboard and its permissions, **retaining the namespace, 
 Each GitHub release includes `kubeweasel-VERSION.tgz`, `install.sh`, and `SHA256SUMS`. Download and verify them from the [releases page](https://github.com/Senan3188/KubeWeasel/releases), then:
 
 ```sh
-helm upgrade --install kubeweasel ./kubeweasel-0.3.1.tgz \
+helm upgrade --install kubeweasel ./kubeweasel-0.4.0.tgz \
   --namespace kubeweasel --create-namespace --wait --timeout 8m
 kubectl -n kubeweasel port-forward deployment/kubeweasel 7878:7878
 ```
 
 For a direct Helm reinstall using a retained account volume, add `--set persistence.existingClaim=kubeweasel-data`. The installer handles this detection automatically. Advanced HTTPS reverse-proxy setup and optional discovery/monitoring controls are described below.
 
-For development, build an image with `docker build -t YOUR_REGISTRY/kubeweasel:0.3.1 .` and push it, or use the local Docker Desktop image store. The installer accepts `--chart charts/kubeweasel --image-repository YOUR_REGISTRY/kubeweasel --image-tag 0.3.1` for testing. These overrides do not download or verify the release chart.
+For development, build an image with `docker build -t YOUR_REGISTRY/kubeweasel:0.4.0 .` and push it, or use the local Docker Desktop image store. The installer accepts `--chart charts/kubeweasel --image-repository YOUR_REGISTRY/kubeweasel --image-tag 0.4.0` for testing. These overrides do not download or verify the release chart.
 
 ## Multiple clusters
 
-Use the sidebar cluster selector to switch environments, and **Manage → Connect cluster** to add a connection. The current installation remains **Local cluster** and existing project IDs are preserved. Multi-cluster connections and node management are included starting with v0.2.0. Helm 4 support starts with installer v0.2.1; direct private access requires v0.3.1 or newer.
+Use the sidebar cluster selector to switch environments, and **Manage → Connect cluster** to add a connection. The current installation remains **Local cluster** and existing project IDs are preserved. Multi-cluster connections and node management are included starting with v0.2.0. Helm 4 support starts with installer v0.2.1; direct private access requires v0.4.0 or newer.
 
 Each connection has a name, a fixed application namespace, and a self-contained kubeconfig. The API server must be reachable **from the dashboard server**. A localhost address inside an installed dashboard container refers to that container, not your laptop. Create the target namespace first. Use one connection per cluster/namespace; connecting the same namespace twice exposes the same workloads with separate folder metadata.
 
@@ -381,3 +381,14 @@ An opt-in live check deploys a working image with a test PVC, changes to a broke
 KUBEWEASEL_RUN_HISTORY_TEST=1 cargo test --locked \
   history::live_tests::rollback_recovers_image_and_preserves_storage_and_configuration -- --ignored
 ```
+
+
+## Multiple domains per application
+
+In **Application → Networking → Domains**, choose **Add domain** to keep a public hostname and an internal hostname on the same app. Each entry has its own path, ingress class and HTTP/HTTPS policy. One Traefik controller can serve every entry; all routes use the app's existing Kubernetes Service and container port. The limit is 20 routes per application. Edit and Remove affect only the chosen entry; changing domains does not restart the application.
+
+For example, route `qr-generator.example.com` through Cloudflare Tunnel to Traefik on HTTP port 80, and point private DNS `qr.saturn.internal` at the ingress node's NetBird IP. Add both hostnames using ingress class `traefik`. Cloudflare can terminate public HTTPS while its ingress route uses HTTP. An internal DNS name is not an access restriction; control access with your VPN or network policy. KubeWeasel does not configure DNS records or Cloudflare tunnels.
+
+Each route independently supports HTTP, an existing TLS Secret, or cert-manager automatic HTTPS with its own issuer and generated Secret. Select a saved domain in **Networking checks** to inspect and test that route. Certificate status follows the domain being edited. Removing a route retains certificate resources and Secrets. Existing single-domain routes keep their Ingress name and TLS settings during upgrade; the old `/domain` endpoint continues to manage the legacy route.
+
+Version 0.4.0 adds namespace-scoped `list` permission for Ingress resources. Helm upgrades apply it locally. For existing remote cluster connections, reapply the updated `deploy/remote-cluster-rbac.yaml` Role in the remote app namespace before using domain settings. Connection permission checks report whether Ingress listing is allowed. No additional ingress controller, cluster-admin permission or Secret reads are required.

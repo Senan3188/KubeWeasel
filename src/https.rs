@@ -13,7 +13,7 @@ use crate::{
 use axum::http::HeaderMap;
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     routing::get,
 };
 use kube::{
@@ -214,9 +214,14 @@ fn certificate_state(c: &Value, d: &Domain) -> Value {
         json!({"state":if failed{"error"}else{"pending"},"title":if failed{"Certificate issuance needs attention"}else{"Issuing certificate"},"message":reason(c),"not_after":c.pointer("/status/notAfter"),"renewal_time":c.pointer("/status/renewalTime")})
     }
 }
-async fn status(State(s): State<AppState>, Path(name): Path<String>) -> Result<Json<Value>> {
+async fn status(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Query(selection): Query<settings::domains::Selection>,
+) -> Result<Json<Value>> {
     let cfg = settings::load(&s, &name).await?;
-    Ok(Json(inspect(&s, &cfg.domain).await))
+    let domain = settings::domains::selected(&cfg, selection.domain.as_deref())?;
+    Ok(Json(inspect(&s, domain).await))
 }
 pub async fn inspect(s: &AppState, d: &Domain) -> Value {
     let mut output = json!({"mode":mode(d),"host":d.host,"secret":d.tls_secret,"issuers":[],"state":"http","title":"HTTP only","message":"Choose Automatic HTTPS to request and renew certificates with cert-manager.","available":false});

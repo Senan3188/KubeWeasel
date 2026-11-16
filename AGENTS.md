@@ -21,6 +21,7 @@ These instructions apply throughout this repository.
 - `src/git.rs`: public Git/Dockerfile builds, retained registry credentials, bounded rootless build Jobs, and restart-safe promotion.
 - `src/registry.rs`: image-provider validation and image-pull credential creation before deployment or source changes.
 - `src/history.rs`: bounded image/build history, rollout observation, digest-aware rollback, and pending-build supersession.
+- `src/settings/domains.rs`: independent per-domain Ingress CRUD, legacy-route discovery, ownership and bounded route validation.
 - `src/settings.rs`: application configuration, resource ownership checks, Ingress management, and temporary pod port forwarding.
 - `src/nodes/`: node inspection, conditional scheduling/metadata patches, drain validation, controller verification and PDB-respecting eviction. `dashboard/nodes.js` owns the selected-cluster Nodes screen.
 - `src/monitoring.rs`: application and whole-node usage, allocatable capacity, pod reservations, unit conversion, and metrics availability.
@@ -56,6 +57,7 @@ These instructions apply throughout this repository.
 - Report partial failures for operations spanning multiple Kubernetes resources; do not claim they are atomic.
 - Bind temporary forward listeners to loopback and cancel their tasks when stopped or dropped.
 - Distinguish saved routing configuration, controller-class registration, DNS resolution, and actual connection success.
+- Keep multiple domains as independent application-scoped Ingress resources, each with its own TLS policy. Preserve legacy Ingress IDs and TLS references; old `/domain` updates only the legacy route. Add/edit/remove one entry without touching other domains or restarting workloads. Bound routes to 20, reject duplicate host/path pairs, verify application ownership and use UID/version preconditions. Domain removal orphans certificate dependents and never deletes Secrets. Keep per-domain certificate status and connection tests tied to the selected saved route; DNS names alone are not access controls. Ingress listing requires namespace-scoped list permission locally and in remote Roles.
 - Automatic HTTPS must preserve legacy TLS settings, remove obsolete issuer annotations on mode changes, and distinguish certificate readiness from public HTTPS reachability. Use staging or self-signed issuers for tests; never silently request production certificates.
 - Connection tests use the saved hostname/path, validate HTTPS certificates, do not follow redirects, and explain where the test runs.
 - Report missing metrics as unavailable, not zero. Distinguish application usage from whole-node/VM usage, allocatable capacity, requests, and configured limits. Never imply these measurements are cloud billing totals.

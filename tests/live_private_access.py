@@ -119,8 +119,13 @@ try:
     # Reproduce storage drivers adding fsGroup read/write bits on remount.
     kube('exec', 'deployment/kubeweasel', '-c', 'dashboard', '--', 'chmod', '660', key_path)
 
-    kube('apply', '-f', '-', data=json.dumps({'apiVersion': 'apps/v1', 'kind': 'Deployment', 'metadata': {'name': 'retained-app'}, 'spec': {'replicas': 0, 'selector': {'matchLabels': {'app': 'retained-app'}}, 'template': {'metadata': {'labels': {'app': 'retained-app'}}, 'spec': {'containers': [{'name': 'app', 'image': 'registry.k8s.io/pause:3.10'}]}}}}))
+    api('/api/apps', {'name': 'retained-app', 'image': 'nginx:stable', 'port': 8080, 'replicas': 0, 'project_id': project})
     workload = uid('deployment', 'retained-app')
+    public_route = {'host': 'public.example.test', 'path': '/', 'ingress_class': 'traefik', 'tls_mode': 'existing', 'tls_secret': 'retained-route-tls'}
+    api('/api/apps/retained-app/domain', public_route)
+    legacy_ingress = uid('ingress', 'retained-app')
+    kube('apply', '-f', '-', data=json.dumps({'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim', 'metadata': {'name': 'retained-app-data'}, 'spec': {'storageClassName': '', 'accessModes': ['ReadWriteOnce'], 'resources': {'requests': {'storage': '1Mi'}}}}))
+    app_claim = uid('pvc', 'retained-app-data')
     forward.terminate()
     forward.wait(timeout=10)
     forward = None
@@ -142,6 +147,39 @@ try:
     api('/api/projects', extra={'Host': 'evil.example:17887'}, expected=403)
     api('/api/projects', {'name': 'Blocked'}, {'Origin': 'http://evil.example:17887'}, expected=403)
     api('/api/projects', {'name': 'Blocked'}, {'x-kubeweasel-csrf': ''}, expected=403)
+    def config():
+        return api('/api/apps/retained-app/config')['config']
+    cfg = config()
+    assert len(cfg['domains']) == 1 and cfg['domains'][0]['id'] == 'retained-app'
+    assert cfg['domains'][0]['tls_secret'] == 'retained-route-tls'
+    original_spec = json.loads(kube('get', 'deployment', 'retained-app', '-o', 'json'))['spec']
+    internal = {'host': 'app.saturn.internal', 'path': '/', 'ingress_class': 'traefik', 'tls_mode': 'http', 'tls_secret': ''}
+    route_id = api('/api/apps/retained-app/domains', internal)['id']
+    assert len(config()['domains']) == 2
+    api('/api/apps', {'name': 'other-app', 'image': 'nginx:stable', 'port': 8080, 'replicas': 0, 'project_id': project})
+    api('/api/apps/other-app/domains/' + route_id, internal, expected=404)
+    api('/api/apps/other-app/domains/' + route_id, {}, method='DELETE', expected=404)
+
+    assert uid('ingress', 'retained-app') == legacy_ingress
+    assert json.loads(kube('get', 'deployment', 'retained-app', '-o', 'json'))['spec'] == original_spec
+    api('/api/apps/retained-app/domains', internal, expected=400)
+    internal['host'] = 'internal.example.test'
+    api('/api/apps/retained-app/domains/' + route_id, internal)
+    assert api('/api/apps/retained-app/https?domain=' + route_id)['host'] == internal['host']
+    assert api('/api/apps/retained-app/networking/diagnostics?domain=' + route_id)['host'] == internal['host']
+    assert config()['domain']['tls_secret'] == 'retained-route-tls'
+    api('/api/apps/retained-app/port', {'port': 3000})
+    service = json.loads(kube('get', 'service', 'retained-app', '-o', 'json'))
+    assert service['spec']['ports'][0]['port'] == 8080
+    assert service['spec']['ports'][0]['targetPort'] == 3000
+    for route in ['retained-app', route_id]:
+        ingress = json.loads(kube('get', 'ingress', route, '-o', 'json'))
+        backend = ingress['spec']['rules'][0]['http']['paths'][0]['backend']['service']
+        assert backend == {'name': 'retained-app', 'port': {'number': 8080}}
+    api('/api/apps/retained-app/domains/' + route_id, {}, method='DELETE')
+    assert len(config()['domains']) == 1 and config()['domain']['host'] == public_route['host']
+    assert uid('ingress', 'retained-app') == legacy_ingress
+    print('Legacy public TLS route preserved; second-domain create/edit/delete, per-domain diagnostics and stable Service port passed.', flush=True)
     assert ORIGIN in installer('open')
     assert 'port-forward' not in installer('open')
     # The gateway and backend can both restart without a terminal or tunnel.
@@ -158,12 +196,16 @@ try:
     installer('uninstall')
     assert uid('pvc', 'kubeweasel-data') == claim
     assert uid('deployment', 'retained-app') == workload
+    assert uid('pvc', 'retained-app-data') == app_claim
+    assert uid('ingress', 'retained-app') == legacy_ingress
     installer('install', *private_args)
     cookies.clear()
     login()
     assert any(p['id'] == project for p in api('/api/projects')['projects'])
     assert uid('pvc', 'kubeweasel-data') == claim
     assert uid('deployment', 'retained-app') == workload
+    assert uid('pvc', 'retained-app-data') == app_claim
+    assert uid('ingress', 'retained-app') == legacy_ingress
     assert key_digest() == original_key
     print('Private access: old-release upgrade, cross-node retained storage, direct login, Host/Origin/CSRF guards, restarts and retained-data reinstall passed.')
     # Explicit account reset: only the disposable account PVC, never app data.
@@ -173,6 +215,8 @@ try:
     cookies.clear()
     assert uid('pvc', 'kubeweasel-data') != claim
     assert uid('deployment', 'retained-app') == workload
+    assert uid('pvc', 'retained-app-data') == app_claim
+    assert uid('ingress', 'retained-app') == legacy_ingress
     assert api('/api/auth/status')['setup_required'] is True
     fresh_key = key_digest()
     assert fresh_key != original_key

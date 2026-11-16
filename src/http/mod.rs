@@ -294,6 +294,77 @@ mod tests {
             .status(),
             StatusCode::OK
         );
+        // Preserve the old domain endpoint and add independent scoped routes.
+        let legacy = json!({"host":"public.example.test","path":"/","ingress_class":"traefik","tls_mode":"existing","tls_secret":"public-tls"});
+        assert_eq!(
+            request(&app, "/api/apps/smoke-app/domain", Some(legacy), session)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        let internal = json!({"host":"app.saturn.internal","path":"/","ingress_class":"traefik","tls_mode":"http","tls_secret":""});
+        let path = "/api/clusters/local/apps/smoke-app/domains";
+        assert_eq!(
+            request(&app, path, Some(internal.clone()), Some((&cookie, "")))
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let response = request(&app, path, Some(internal.clone()), session).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let id = json_body(response).await["id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            request(&app, path, Some(internal), session).await.status(),
+            StatusCode::BAD_REQUEST
+        );
+        let cfg = json_body(request(&app, "/api/apps/smoke-app/config", None, session).await).await;
+        assert_eq!(cfg["config"]["domains"].as_array().unwrap().len(), 2);
+        assert_eq!(cfg["config"]["domain"]["tls_secret"], "public-tls");
+        assert_eq!(cfg["config"]["port"], 8080);
+        let status = json_body(
+            request(
+                &app,
+                &format!("/api/apps/smoke-app/https?domain={id}"),
+                None,
+                session,
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status["host"], "app.saturn.internal");
+        let endpoint = format!("/api/clusters/local/apps/smoke-app/domains/{id}");
+        let response = request(&app, &endpoint, Some(json!({"host":"renamed.saturn.internal","path":"/","ingress_class":"traefik","tls_mode":"existing","tls_secret":"internal-tls"})), session).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            request(
+                &app,
+                "/api/apps/smoke-app/domains/unknown",
+                Some(
+                    json!({"host":"bad.test","path":"/","ingress_class":"traefik","tls_secret":""})
+                ),
+                session
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        let delete_request = Request::builder()
+            .uri(&endpoint)
+            .method("DELETE")
+            .header("host", "127.0.0.1:7878")
+            .header("cookie", &cookie)
+            .header("x-kubeweasel-request", "dashboard")
+            .header("x-kubeweasel-csrf", &csrf)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(delete_request).await.unwrap().status(),
+            StatusCode::OK
+        );
+        let cfg = json_body(request(&app, "/api/apps/smoke-app/config", None, session).await).await;
+        assert_eq!(cfg["config"]["domains"].as_array().unwrap().len(), 1);
+        assert_eq!(cfg["config"]["domain"]["host"], "public.example.test");
+        assert_eq!(cfg["config"]["domain"]["tls_secret"], "public-tls");
         let logs = json_body(request(&app, "/api/apps/smoke-app/logs", None, session).await).await;
         assert!(logs["logs"].as_str().unwrap().contains("[demo] smoke-app"));
         let overview = json_body(request(&app, "/api/overview", None, session).await).await;

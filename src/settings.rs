@@ -1,3 +1,6 @@
+#[cfg(test)]
+use k8s_openapi::api::networking::v1::Ingress;
+pub(crate) mod domains;
 use crate::{
     applications::models::{App, Deploy},
     error::{Error, Result, invalid},
@@ -14,13 +17,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
-use k8s_openapi::api::{
-    core::v1::{Pod, Service},
-    networking::v1::Ingress,
-};
+use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::{
     Api, ResourceExt,
-    api::{DeleteParams, ListParams, Patch, PatchParams, PostParams},
+    api::{ListParams, Patch, PatchParams},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -35,6 +35,7 @@ use tokio::{
 pub struct SettingsState {
     demo: Arc<RwLock<BTreeMap<String, Config>>>,
     forwards: Arc<Mutex<BTreeMap<String, Forward>>>,
+    domain_gate: Arc<Mutex<()>>,
 }
 impl SettingsState {
     pub(crate) async fn stop_all_forwards(&self) {
@@ -70,9 +71,13 @@ pub(crate) struct Config {
     env: BTreeMap<String, String>,
     #[serde(default)]
     pub(crate) domain: Domain,
+    #[serde(default)]
+    pub(crate) domains: Vec<Domain>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct Domain {
+    #[serde(default)]
+    pub(crate) id: String,
     pub(crate) host: String,
     pub(crate) path: String,
     pub(crate) ingress_class: String,
@@ -116,6 +121,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/apps/{name}/port", post(port))
         .route("/api/apps/{name}/environment", post(environment))
         .route("/api/apps/{name}/resources", post(resources))
+        .merge(domains::routes())
         .route("/api/apps/{name}/domain", post(domain))
         .route("/api/apps/{name}/forward", post(forward))
         .route("/api/apps/{name}/forward/stop", post(stop_forward))
@@ -138,6 +144,7 @@ fn defaults(app: &App) -> Config {
         memory_limit: "512Mi".into(),
         env: BTreeMap::new(),
         domain: Domain::default(),
+        domains: Vec::new(),
     }
 }
 pub(crate) async fn load(s: &AppState, name: &str) -> Result<Config> {
@@ -224,31 +231,10 @@ pub(crate) async fn load(s: &AppState, name: &str) -> Result<Config> {
             .filter_map(|e| e.value.map(|v| (e.name, v)))
             .collect(),
         domain: Domain::default(),
+        domains: Vec::new(),
     };
-    let ingresses: Api<Ingress> = Api::namespaced(s.client.clone().unwrap(), &s.namespace);
-    if let Some(i) = ingresses.get_opt(name).await?
-        && i.labels()
-            .get("app.kubernetes.io/managed-by")
-            .map(String::as_str)
-            == Some("kubeweasel")
-        && let Some(spec) = i.spec
-    {
-        https::read_annotations(&mut cfg.domain, &i.metadata.annotations.unwrap_or_default());
-        cfg.domain.ingress_class = spec.ingress_class_name.unwrap_or_default();
-        cfg.domain.tls_secret = spec
-            .tls
-            .and_then(|t| t.into_iter().next())
-            .and_then(|t| t.secret_name)
-            .unwrap_or_default();
-        if let Some(rule) = spec.rules.and_then(|r| r.into_iter().next()) {
-            cfg.domain.host = rule.host.unwrap_or_default();
-            cfg.domain.path = rule
-                .http
-                .and_then(|h| h.paths.into_iter().next())
-                .and_then(|p| p.path)
-                .unwrap_or_else(|| "/".into());
-        }
-    }
+    cfg.domains = domains::load(s, name).await?;
+    cfg.domain = cfg.domains.first().cloned().unwrap_or_default();
     Ok(cfg)
 }
 async fn config(State(s): State<AppState>, Path(name): Path<String>) -> Result<Json<Value>> {
@@ -518,54 +504,11 @@ pub(crate) async fn domain(
     Json(mut d): Json<Domain>,
 ) -> Result<Json<Value>> {
     mutation(&headers)?;
-    validate_domain(&d)?;
-    let mut cfg = load(&s, &name).await?;
-    https::normalize(&name, &mut d, &cfg.domain)?;
-    https::require_automatic(&s, &d).await?;
-    if let Some(c) = s.client.clone() {
-        let api: Api<Ingress> = Api::namespaced(c, &s.namespace);
-        let existing = api.get_opt(&name).await?;
-        if let Some(i) = existing.as_ref()
-            && i.labels()
-                .get("app.kubernetes.io/managed-by")
-                .map(String::as_str)
-                != Some("kubeweasel")
-        {
-            return Err(Error(
-                StatusCode::FORBIDDEN,
-                "An unmanaged Ingress already uses this name.".into(),
-            ));
-        }
-        if d.host.is_empty() {
-            if let Some(i) = existing {
-                api.delete(
-                    &name,
-                    &DeleteParams {
-                        preconditions: Some(kube::api::Preconditions {
-                            uid: i.metadata.uid,
-                            resource_version: i.metadata.resource_version,
-                        }),
-                        ..Default::default()
-                    },
-                )
-                .await?;
-            }
-        } else {
-            let value = ingress(&name, &d, service_port(&s, &name).await?);
-            if existing.is_some() {
-                api.patch(&name,&PatchParams::default(),&Patch::Merge(json!({"metadata":{"annotations":https::annotations(&d)},"spec":{"rules":value["spec"]["rules"],"ingressClassName":if d.ingress_class.is_empty(){Value::Null}else{json!(d.ingress_class)},"tls":if d.tls_secret.is_empty(){Value::Null}else{value["spec"]["tls"].clone()}}}))).await?;
-            } else {
-                let object: Ingress =
-                    serde_json::from_value(value).map_err(|_| invalid("Invalid Ingress"))?;
-                api.create(&PostParams::default(), &object).await?;
-            }
-        }
-    } else {
-        cfg.domain = d;
-        s.settings.demo.write().await.insert(name, cfg);
-    }
-    Ok(Json(json!({"ok":true})))
+    let _guard = s.settings.domain_gate.lock().await;
+    d.id = name.clone();
+    domains::save(&s, &name, d, true).await
 }
+
 async fn forward(
     State(s): State<AppState>,
     Path(name): Path<String>,

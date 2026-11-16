@@ -149,6 +149,13 @@ pub(super) async fn test(client: Client, namespace: &str) -> Value {
             "create",
             true,
         ),
+        (
+            "Read domain routes",
+            "networking.k8s.io",
+            "ingresses",
+            "list",
+            true,
+        ),
         ("Node monitoring", "", "nodes", "list", false),
         ("Node management", "", "nodes", "patch", false),
         ("Node drain", "", "pods/eviction", "create", false),
