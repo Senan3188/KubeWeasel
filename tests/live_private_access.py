@@ -78,6 +78,7 @@ try:
     # This proves enabling access does not try to move node-local account storage.
     kube('cordon', node)
     installer('install', '--version', '0.2.1')
+    print('Published v0.2.1 installed on worker.', flush=True)
     kube('uncordon', node)
     old_pod = json.loads(kube('get', 'pods', '-l', 'app=kubeweasel', '-o', 'json'))['items'][0]
     storage_node = old_pod['spec']['nodeName']
@@ -99,6 +100,7 @@ try:
     forward.wait(timeout=10)
     forward = None
     output = installer('upgrade', *private_args)
+    print('Private gateway upgrade reached readiness.', flush=True)
     assert 'Dashboard ready: ' + ORIGIN in output
     assert 'No port-forward or SSH tunnel is needed.' in output
     assert uid('pvc', 'kubeweasel-data') == claim
@@ -121,6 +123,7 @@ try:
     kube('rollout', 'restart', 'deployment/kubeweasel')
     kube('rollout', 'status', 'deployment/kubeweasel', '--timeout=3m')
     login()
+    print('Direct login, guards and independent restarts passed.', flush=True)
     installer('uninstall')
     assert uid('pvc', 'kubeweasel-data') == claim
     assert uid('deployment', 'retained-app') == workload
@@ -134,6 +137,9 @@ try:
 except Exception:
     print(kube('get', 'pods,pvc', '-o', 'wide'))
     print(kube('get', 'events', '--sort-by=.lastTimestamp'))
+    # This tokenless gateway never runs owner setup or logs request bodies.
+    diagnostic = subprocess.run(['kubectl', '--context', CTX, '-n', NS, 'logs', 'deployment/kubeweasel-access', '--container', 'access', '--tail=30'], text=True, capture_output=True)
+    print(diagnostic.stdout)
     raise
 finally:
     if forward:
