@@ -79,3 +79,14 @@ jobs:
       - name: Remove disposable cluster
         if: always()
         run: '"$(go env GOPATH)/bin/kind" delete cluster --name kubeweasel-access'
+  netbird-ingress-helper:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install nftables test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nftables iproute2
+      - name: Validate scoped host workaround in an isolated network
+        run: sudo env KUBEWEASEL_RUN_NETBIRD_FIX_TEST=1 unshare --net python3 tests/live_netbird_ingress.py

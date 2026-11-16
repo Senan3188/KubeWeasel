@@ -392,3 +392,8 @@ For example, route `qr-generator.example.com` through Cloudflare Tunnel to Traef
 Each route independently supports HTTP, an existing TLS Secret, or cert-manager automatic HTTPS with its own issuer and generated Secret. Select a saved domain in **Networking checks** to inspect and test that route. Certificate status follows the domain being edited. Removing a route retains certificate resources and Secrets. Existing single-domain routes keep their Ingress name and TLS settings during upgrade; the old `/domain` endpoint continues to manage the legacy route.
 
 Version 0.4.0 adds namespace-scoped `list` permission for Ingress resources. Helm upgrades apply it locally. For existing remote cluster connections, reapply the updated `deploy/remote-cluster-rbac.yaml` Role in the remote app namespace before using domain settings. Connection permission checks report whether Ingress listing is allowed. No additional ingress controller, cluster-admin permission or Secret reads are required.
+
+
+### NetBird/K3s ingress compatibility
+
+If the app works from the Ubuntu server but VPN clients time out on ingress ports despite correct policies, check for the [NetBird/K3s packet-mark collision](docs/netbird-ingress.md). The opt-in host helper in `scripts/netbird-ingress.py` maintains a narrowly scoped, policy-aware workaround across restarts and rule refreshes. It is installed separately on the affected Ubuntu ingress nodes; the dashboard installer never changes host firewall rules automatically.
