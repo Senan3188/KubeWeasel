@@ -54,6 +54,9 @@ fn belongs(i: &Ingress, app: &str) -> bool {
             || (i.name_any() == app && !i.labels().contains_key(APP_LABEL)))
 }
 fn read(i: Ingress) -> Option<Domain> {
+    if i.metadata.deletion_timestamp.is_some() {
+        return None;
+    }
     let mut d = Domain {
         id: i.name_any(),
         ..Default::default()
@@ -262,6 +265,11 @@ mod tests {
         let domain = read(original.clone()).unwrap();
         assert_eq!(domain.id, "web");
         assert_eq!(domain.tls_secret, "retained-tls");
+        let mut deleting = original.clone();
+        deleting.metadata.deletion_timestamp =
+            Some(serde_json::from_value(json!("2026-01-01T00:00:00Z")).unwrap());
+        assert!(read(deleting).is_none());
+
         original
             .metadata
             .labels
