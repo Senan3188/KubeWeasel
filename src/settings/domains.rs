@@ -145,7 +145,7 @@ async fn create(
     mutation(&headers)?;
     let _guard = s.settings.domain_gate.lock().await;
     d.id = new_id(&app);
-    save(&s, &app, d, false).await
+    save(&s, &app, d, false).await.map(saved)
 }
 async fn update(
     State(s): State<AppState>,
@@ -158,7 +158,7 @@ async fn update(
     let cfg = settings::load(&s, &app).await?;
     selected(&cfg, Some(&id))?;
     d.id = id;
-    save(&s, &app, d, false).await
+    save(&s, &app, d, false).await.map(saved)
 }
 async fn remove(
     State(s): State<AppState>,
@@ -170,14 +170,13 @@ async fn remove(
     let cfg = settings::load(&s, &app).await?;
     let mut d = selected(&cfg, Some(&id))?.clone();
     d.host.clear();
-    save(&s, &app, d, true).await
+    save(&s, &app, d, true).await.map(saved)
 }
-pub(super) async fn save(
-    s: &AppState,
-    app: &str,
-    mut d: Domain,
-    legacy: bool,
-) -> Result<Json<Value>> {
+fn saved(id: String) -> Json<Value> {
+    Json(json!({"ok":true,"id":id}))
+}
+
+pub(super) async fn save(s: &AppState, app: &str, mut d: Domain, legacy: bool) -> Result<String> {
     if !valid_name(&d.id) {
         return Err(invalid("Invalid domain route ID."));
     }
@@ -239,7 +238,7 @@ pub(super) async fn save(
         cfg.domain = cfg.domains.first().cloned().unwrap_or_default();
         s.settings.demo.write().await.insert(app.into(), cfg);
     }
-    Ok(Json(json!({"ok":true,"id":d.id})))
+    Ok(d.id)
 }
 
 #[cfg(test)]

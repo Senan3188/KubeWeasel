@@ -506,7 +506,8 @@ pub(crate) async fn domain(
     mutation(&headers)?;
     let _guard = s.settings.domain_gate.lock().await;
     d.id = name.clone();
-    domains::save(&s, &name, d, true).await
+    let id = domains::save(&s, &name, d, true).await?;
+    Ok(Json(json!({"ok":true,"id":id})))
 }
 
 async fn forward(
