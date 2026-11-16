@@ -28,3 +28,4 @@ nav{display:grid;gap:8px}nav button:not(.selected){background:transparent;color:
 .domain-list{display:grid;gap:12px;margin:20px 0}.domain-card{display:flex;align-items:center;justify-content:space-between;gap:16px;border:1px solid #30343b;border-radius:12px;padding:16px;min-width:0}.domain-card strong{overflow-wrap:anywhere}.domain-actions{display:flex;gap:8px;flex-shrink:0}.domain-card .settings-note{margin:6px 0 0}.domain-list+button{margin-bottom:12px}@media(max-width:650px){.domain-card{align-items:stretch;flex-direction:column}.domain-actions{flex-wrap:wrap}.diagnostic-toolbar select{max-width:100%}}
 
 .diagnostic-toolbar{gap:12px;flex-wrap:wrap}.diagnostic-toolbar select{max-width:100%;min-width:0;flex:1}
+.domain-actions button{display:inline-flex;align-items:center;justify-content:center;min-width:120px;min-height:40px;margin:0;padding:9px 13px;font-size:12px;line-height:20px}
