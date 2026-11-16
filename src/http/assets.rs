@@ -11,6 +11,10 @@ fn javascript(contents: &'static str) -> MethodRouter<AppState> {
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route(
+            "/connections.js",
+            javascript(include_str!("../../dashboard/connections.js")),
+        )
+        .route(
             "/nodes.js",
             javascript(include_str!("../../dashboard/nodes.js")),
         )

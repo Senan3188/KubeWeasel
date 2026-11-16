@@ -167,17 +167,7 @@ pub(crate) async fn scale(state: &AppState, name: &str, request: Scale) -> Resul
     Ok(())
 }
 pub(crate) async fn restart(state: &AppState, name: &str) -> Result<()> {
-    if state.client.is_some() {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-            .to_string();
-        workloads::managed(state,name).await?.patch(name,&PatchParams::default(),&Patch::Merge(json!({"spec":{"template":{"metadata":{"annotations":{"kubeweasel.io/restarted-at":stamp}}}}}))).await?;
-    } else if !state.apps.read().await.contains_key(name) {
-        return Err(Error::not_found("App not found"));
-    }
-    Ok(())
+    crate::connections::restart_application(state, name).await
 }
 pub(crate) async fn logs(state: &AppState, name: &str) -> Result<String> {
     if let Some(c) = state.client.clone() {

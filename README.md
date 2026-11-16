@@ -37,7 +37,7 @@ Deployment names must be lowercase DNS labels of at most 63 characters. New appl
 
 ## Install from the command line
 
-Installer v0.4.0 supports both Helm 3.12+ and Helm 4; it selects the correct release-listing flags for each version.
+Installer v0.5.0 supports both Helm 3.12+ and Helm 4; it selects the correct release-listing flags for each version.
 
 Requires a running Kubernetes cluster, `kubectl`, Helm 3.12+ (or Helm 4), Bash, curl, and a default StorageClass (or a class you choose). No Rust or Docker installation is needed on the user's computer. The release image supports Linux AMD64 and ARM64.
 
@@ -48,7 +48,7 @@ curl -fsSL https://github.com/Senan3188/KubeWeasel/releases/latest/download/inst
 For direct access on a trusted private network or VPN, choose the dashboard URL and the node's private IP:
 
 ```sh
-curl -fsSLo install.sh https://github.com/Senan3188/KubeWeasel/releases/download/v0.4.0/install.sh
+curl -fsSLo install.sh https://github.com/Senan3188/KubeWeasel/releases/download/v0.5.0/install.sh
 bash install.sh install \
   --private-http http://deploy.example.internal:7878 \
   --listen-address 100.73.28.50
@@ -63,9 +63,9 @@ The installer uses your current Kubernetes context, prints the selected context 
 For a reviewable, pinned installation and explicit cluster selection:
 
 ```sh
-curl -fsSLo install.sh https://github.com/Senan3188/KubeWeasel/releases/download/v0.4.0/install.sh
+curl -fsSLo install.sh https://github.com/Senan3188/KubeWeasel/releases/download/v0.5.0/install.sh
 # Review install.sh before executing it.
-bash install.sh install --context YOUR_CONTEXT --namespace kubeweasel --version 0.4.0
+bash install.sh install --context YOUR_CONTEXT --namespace kubeweasel --version 0.5.0
 ```
 
 Use `--storage-class YOUR_CLASS` if the cluster has no default, and `--storage-size 2Gi` to choose the size of a new account volume. If optional cluster-level discovery/monitoring permissions are unavailable, use `--namespace-only` with namespace permissions and an existing namespace. This disables node monitoring and cluster-wide class/issuer discovery. In this mode the installer does not create a namespace; an administrator must create it and grant the namespace permissions first. The default installation grants namespace-scoped application mutations and optional read-only cluster monitoring/discovery roles.
@@ -81,11 +81,11 @@ For first-run setup, use the token in the dashboard pod's logs (the installer pr
 
 ```sh
 bash install.sh status --context YOUR_CONTEXT --namespace kubeweasel
-bash install.sh upgrade --context YOUR_CONTEXT --namespace kubeweasel --version 0.4.0
+bash install.sh upgrade --context YOUR_CONTEXT --namespace kubeweasel --version 0.5.0
 bash install.sh uninstall --context YOUR_CONTEXT --namespace kubeweasel
 ```
 
-Before upgrading from v0.1.0, back up the account SQLite database while the dashboard is stopped or using a SQLite-aware backup. v0.4.0 migrates existing project folders into the local cluster without changing their IDs. After connecting remote clusters, back up the matching `/data/kubeweasel.db.cluster-key` alongside the database; restore both together. See [release notes](docs/releases/0.4.0.md).
+Before upgrading from v0.1.0, back up the account SQLite database while the dashboard is stopped or using a SQLite-aware backup. v0.4.0 migrates existing project folders into the local cluster without changing their IDs. After connecting remote clusters, back up the matching `/data/kubeweasel.db.cluster-key` alongside the database; restore both together. See [release notes](docs/releases/0.5.0.md).
 
 Upgrade preserves the release's existing Helm values and account data. The dashboard uses a single-instance Recreate strategy for SQLite, so an upgrade briefly interrupts dashboard access. Application workloads keep running. Failed readiness checks leave resources in place and print inspection steps; use `upgrade` to retry a failed install. No automatic uninstall or namespace/data deletion is performed on failure.
 
@@ -96,14 +96,14 @@ Uninstall removes the dashboard and its permissions, **retaining the namespace, 
 Each GitHub release includes `kubeweasel-VERSION.tgz`, `install.sh`, and `SHA256SUMS`. Download and verify them from the [releases page](https://github.com/Senan3188/KubeWeasel/releases), then:
 
 ```sh
-helm upgrade --install kubeweasel ./kubeweasel-0.4.0.tgz \
+helm upgrade --install kubeweasel ./kubeweasel-0.5.0.tgz \
   --namespace kubeweasel --create-namespace --wait --timeout 8m
 kubectl -n kubeweasel port-forward deployment/kubeweasel 7878:7878
 ```
 
 For a direct Helm reinstall using a retained account volume, add `--set persistence.existingClaim=kubeweasel-data`. The installer handles this detection automatically. Advanced HTTPS reverse-proxy setup and optional discovery/monitoring controls are described below.
 
-For development, build an image with `docker build -t YOUR_REGISTRY/kubeweasel:0.4.0 .` and push it, or use the local Docker Desktop image store. The installer accepts `--chart charts/kubeweasel --image-repository YOUR_REGISTRY/kubeweasel --image-tag 0.4.0` for testing. These overrides do not download or verify the release chart.
+For development, build an image with `docker build -t YOUR_REGISTRY/kubeweasel:0.5.0 .` and push it, or use the local Docker Desktop image store. The installer accepts `--chart charts/kubeweasel --image-repository YOUR_REGISTRY/kubeweasel --image-tag 0.5.0` for testing. These overrides do not download or verify the release chart.
 
 ## Multiple clusters
 
@@ -397,3 +397,7 @@ Version 0.4.0 adds namespace-scoped `list` permission for Ingress resources. Hel
 ### NetBird/K3s ingress compatibility
 
 If the app works from the Ubuntu server but VPN clients time out on ingress ports despite correct policies, check for the [NetBird/K3s packet-mark collision](docs/netbird-ingress.md). The opt-in host helper in `scripts/netbird-ingress.py` maintains a narrowly scoped, policy-aware workaround across restarts and rule refreshes. It is installed separately on the affected Ubuntu ingress nodes; the dashboard installer never changes host firewall rules automatically.
+
+### Application connections and secrets (v0.5.0)
+
+Projects can define named PostgreSQL, MySQL, Redis, Kafka and custom connections backed by Kubernetes Secrets. Attach several connections to one app, share them with selected apps, and map keys to your backend’s environment variable names. Saved values stay hidden. See [connection setup, rotation and permission changes](docs/connections.md). Included in v0.5.0. Helm upgrades apply the new local namespace permissions; existing remote connections need the updated namespace Role. Secret permissions cover the entire application namespace, not only KubeWeasel labels.

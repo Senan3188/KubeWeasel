@@ -3,6 +3,7 @@ mod applications;
 mod auth;
 mod clusters;
 mod config;
+mod connections;
 mod diagnostics;
 mod error;
 mod git;

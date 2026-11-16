@@ -221,6 +221,11 @@ async fn remove(
     mutation(&headers)?;
     let _gate = s.projects.gate.lock().await;
     s.projects.require(&s.namespace, Some(&id))?;
+    if crate::connections::has_connections(&s, &id).await? {
+        return Err(invalid(
+            "Delete the project’s unused connections before deleting this folder.",
+        ));
+    }
     let assigned = if let Some(client) = s.client {
         !workloads::list(
             client,
@@ -262,6 +267,13 @@ async fn assign(
     mutation(&headers)?;
     let _gate = s.projects.gate.lock().await;
     s.projects.require(&s.namespace, a.project_id.as_deref())?;
+    if crate::connections::app_project(&s, &name).await? != a.project_id
+        && crate::connections::has_bindings(&s, &name).await?
+    {
+        return Err(invalid(
+            "Detach connection variables before moving this application between projects.",
+        ));
+    }
     if s.client.is_some() {
         managed(&s, &name)
             .await?

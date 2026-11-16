@@ -33,6 +33,7 @@ use tokio::{
 
 #[derive(Clone, Default)]
 pub struct SettingsState {
+    pub(crate) connections: crate::connections::State,
     demo: Arc<RwLock<BTreeMap<String, Config>>>,
     forwards: Arc<Mutex<BTreeMap<String, Forward>>>,
     domain_gate: Arc<Mutex<()>>,
@@ -68,7 +69,7 @@ pub(crate) struct Config {
     cpu_limit: String,
     memory_request: String,
     memory_limit: String,
-    env: BTreeMap<String, String>,
+    pub(crate) env: BTreeMap<String, String>,
     #[serde(default)]
     pub(crate) domain: Domain,
     #[serde(default)]
@@ -362,6 +363,7 @@ async fn environment(
     Json(e): Json<Environment>,
 ) -> Result<Json<Value>> {
     mutation(&headers)?;
+    let _gate = s.projects.gate.lock().await;
     if e.env.len() > 100 || e.env.iter().any(|(k, v)| !valid_env(k) || v.len() > 16384) {
         return Err(invalid(
             "Use up to 100 environment variables with valid names and values under 16 KiB.",
@@ -372,6 +374,7 @@ async fn environment(
         // Preserve valueFrom references (Secrets/ConfigMaps); this editor owns literal values only.
         let api = managed(&s, &name).await?;
         let d = api.get(&name).await?;
+        let version = d.metadata.resource_version.clone();
         let mut all = d
             .spec
             .and_then(|d| d.template.spec)
@@ -396,10 +399,16 @@ async fn environment(
                 value_from: None,
             });
         }
+        if all.len() > 100 {
+            return Err(invalid(
+                "An application supports at most 100 environment variables, including references.",
+            ));
+        }
         let mut env = vec![json!({"$patch":"replace"})];
         env.extend(all.into_iter().map(|v| json!(v)));
-        patch_container(&s, &name, json!({"name":"app","env":env})).await?;
+        api.patch(&name, &PatchParams::default(), &Patch::Strategic(json!({"metadata":{"resourceVersion":version},"spec":{"template":{"spec":{"containers":[{"name":"app","env":env}]}}}}))).await?;
     } else {
+        crate::connections::validate_literals(&s, &name, &e.env).await?;
         cfg.env = e.env;
         s.settings.demo.write().await.insert(name, cfg);
     }

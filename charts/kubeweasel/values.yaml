@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/senan3188/kubeweasel
-  tag: "0.4.0"
+  tag: "0.5.0"
   pullPolicy: IfNotPresent
 # Read-only cluster-scoped ingress-class discovery for networking diagnostics.
 # Disable when an administrator does not grant cluster-scoped discovery.

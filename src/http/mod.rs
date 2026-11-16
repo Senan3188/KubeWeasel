@@ -10,6 +10,7 @@ pub(crate) fn features() -> Router<AppState> {
     Router::new()
         .merge(applications::routes())
         .merge(settings::routes())
+        .merge(crate::connections::routes())
         .merge(storage::routes())
         .merge(projects::routes())
         .merge(diagnostics::routes())

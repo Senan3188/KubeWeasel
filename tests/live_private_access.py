@@ -8,6 +8,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+import live_connections
 
 CTX = 'kind-kubeweasel-access'
 NS = 'kw-access-check'
@@ -180,6 +181,7 @@ try:
     assert len(config()['domains']) == 1 and config()['domain']['host'] == public_route['host']
     assert uid('ingress', 'retained-app') == legacy_ingress
     print('Legacy public TLS route preserved; second-domain create/edit/delete, per-domain diagnostics and stable Service port passed.', flush=True)
+    connection_state = live_connections.exercise(api, kube, project)
     assert ORIGIN in installer('open')
     assert 'port-forward' not in installer('open')
     # The gateway and backend can both restart without a terminal or tunnel.
@@ -192,6 +194,7 @@ try:
     assert key_digest() == original_key
     assert kube('exec', 'deployment/kubeweasel', '-c', 'dashboard', '--', 'stat', '-c', '%a', key_path).strip() == '600'
     login()
+    live_connections.verify_retained(api, kube, project, connection_state)
     print('Direct login, guards and independent restarts passed.', flush=True)
     installer('uninstall')
     assert uid('pvc', 'kubeweasel-data') == claim
@@ -207,6 +210,7 @@ try:
     assert uid('pvc', 'retained-app-data') == app_claim
     assert uid('ingress', 'retained-app') == legacy_ingress
     assert key_digest() == original_key
+    live_connections.verify_retained(api, kube, project, connection_state)
     print('Private access: old-release upgrade, cross-node retained storage, direct login, Host/Origin/CSRF guards, restarts and retained-data reinstall passed.')
     # Explicit account reset: only the disposable account PVC, never app data.
     installer('uninstall')
