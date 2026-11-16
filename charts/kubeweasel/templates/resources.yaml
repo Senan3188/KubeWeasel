@@ -75,6 +75,40 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
         fsGroup: 65532
+      # Volume ownership handling can add group bits to an existing private key.
+      # Tighten its mode after mounting, before the dashboard's strict validation.
+      initContainers:
+        - name: account-permissions
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              key=/data/kubeweasel.db.cluster-key
+              if [ -L "$key" ]; then
+                echo "Cluster key must not be a symbolic link." >&2
+                exit 1
+              fi
+              if [ -e "$key" ]; then
+                test -f "$key"
+                chmod 600 "$key"
+              fi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: auth-data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi
       containers:
         - name: dashboard
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

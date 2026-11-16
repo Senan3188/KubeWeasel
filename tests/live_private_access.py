@@ -112,6 +112,13 @@ try:
     csrf = api('/api/auth/setup', {'email': EMAIL, 'password': PASSWORD, 'setup_token': setup_token})['csrf']
     project = api('/api/projects', {'name': 'Preserved project', 'description': 'Access upgrade check'})['project']['id']
     claim = uid('pvc', 'kubeweasel-data')
+    key_path = '/data/kubeweasel.db.cluster-key'
+    def key_digest():
+        return kube('exec', 'deployment/kubeweasel', '-c', 'dashboard', '--', 'sha256sum', key_path).split()[0]
+    original_key = key_digest()
+    # Reproduce storage drivers adding fsGroup read/write bits on remount.
+    kube('exec', 'deployment/kubeweasel', '-c', 'dashboard', '--', 'chmod', '660', key_path)
+
     kube('apply', '-f', '-', data=json.dumps({'apiVersion': 'apps/v1', 'kind': 'Deployment', 'metadata': {'name': 'retained-app'}, 'spec': {'replicas': 0, 'selector': {'matchLabels': {'app': 'retained-app'}}, 'template': {'metadata': {'labels': {'app': 'retained-app'}}, 'spec': {'containers': [{'name': 'app', 'image': 'registry.k8s.io/pause:3.10'}]}}}}))
     workload = uid('deployment', 'retained-app')
     forward.terminate()
@@ -122,6 +129,8 @@ try:
     assert 'Dashboard ready: ' + ORIGIN in output
     assert 'No port-forward or SSH tunnel is needed.' in output
     assert uid('pvc', 'kubeweasel-data') == claim
+    assert key_digest() == original_key
+    assert kube('exec', 'deployment/kubeweasel', '-c', 'dashboard', '--', 'stat', '-c', '%a', key_path).strip() == '600'
     new_pod = json.loads(kube('get', 'pods', '-l', 'app=kubeweasel', '-o', 'json'))['items'][0]
     assert new_pod['spec']['nodeName'] == storage_node
     base = f'http://{ip}:17887'
@@ -138,9 +147,12 @@ try:
     # The gateway and backend can both restart without a terminal or tunnel.
     kube('rollout', 'restart', 'deployment/kubeweasel-access')
     kube('rollout', 'status', 'deployment/kubeweasel-access', '--timeout=3m')
+    kube('exec', 'deployment/kubeweasel', '-c', 'dashboard', '--', 'chmod', '660', key_path)
     kube('rollout', 'restart', 'deployment/kubeweasel')
     kube('rollout', 'status', 'deployment/kubeweasel', '--timeout=3m')
     wait_for_entrypoint()
+    assert key_digest() == original_key
+    assert kube('exec', 'deployment/kubeweasel', '-c', 'dashboard', '--', 'stat', '-c', '%a', key_path).strip() == '600'
     login()
     print('Direct login, guards and independent restarts passed.', flush=True)
     installer('uninstall')
@@ -152,7 +164,29 @@ try:
     assert any(p['id'] == project for p in api('/api/projects')['projects'])
     assert uid('pvc', 'kubeweasel-data') == claim
     assert uid('deployment', 'retained-app') == workload
+    assert key_digest() == original_key
     print('Private access: old-release upgrade, cross-node retained storage, direct login, Host/Origin/CSRF guards, restarts and retained-data reinstall passed.')
+    # Explicit account reset: only the disposable account PVC, never app data.
+    installer('uninstall')
+    kube('delete', 'pvc', 'kubeweasel-data', '--wait=true')
+    installer('install', *private_args)
+    cookies.clear()
+    assert uid('pvc', 'kubeweasel-data') != claim
+    assert uid('deployment', 'retained-app') == workload
+    assert api('/api/auth/status')['setup_required'] is True
+    fresh_key = key_digest()
+    assert fresh_key != original_key
+    setup_token = re.search(r'first-run setup token: ([a-f0-9]+)', kube('logs', 'deployment/kubeweasel', '--container', 'dashboard')).group(1)
+    csrf = api('/api/auth/setup', {'email': EMAIL, 'password': PASSWORD, 'setup_token': setup_token})['csrf']
+    kube('exec', 'deployment/kubeweasel', '-c', 'dashboard', '--', 'chmod', '660', key_path)
+    kube('rollout', 'restart', 'deployment/kubeweasel')
+    kube('rollout', 'status', 'deployment/kubeweasel', '--timeout=3m')
+    wait_for_entrypoint()
+    login()
+    assert key_digest() == fresh_key
+    assert kube('exec', 'deployment/kubeweasel', '-c', 'dashboard', '--', 'stat', '-c', '%a', key_path).strip() == '600'
+    print('Explicit fresh account install and private-key permission recovery after restart passed; app workload retained.')
+
 except Exception:
     print(kube('get', 'pods,pvc', '-o', 'wide'))
     print(kube('get', 'events', '--sort-by=.lastTimestamp'))
