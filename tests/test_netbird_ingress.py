@@ -52,7 +52,9 @@ class FakeRunner:
                 elif line.startswith('insert rule'):
                     self.counter += 1
                     comment = re.search(r'comment "([^"]+)"', line).group(1)
-                    self.forward.insert(0, {'handle': self.counter, 'comment': comment, 'expr': []})
+                    position = int(re.search(r'position ([0-9]+)', line).group(1))
+                    index = next(i for i, r in enumerate(self.forward) if r['handle'] == position)
+                    self.forward.insert(index, {'handle': self.counter, 'comment': comment, 'expr': []})
                 else:
                     raise AssertionError(line)
             return ''
@@ -64,7 +66,7 @@ class FakeRunner:
 class NetbirdIngressTests(unittest.TestCase):
     def test_scope_preserves_authorization_marks_and_kubernetes_bits(self):
         config = fix.validate('wt0', [443, 80, 80])
-        rule = fix.rule_text(config, '100.100.0.1')
+        rule = fix.rule_text(config, '100.100.0.1', 1)
         for text in ('iifname "wt0"', 'ct status dnat', 'ct original ip daddr 100.100.0.1', 'meta l4proto tcp', 'ct original proto-dst { 80, 443 }', 'meta mark and 0xfffcbfff == 0x0000bd20'):
             self.assertIn(text, rule)
         self.assertNotIn('ip saddr', rule)  # Membership comes from NetBird's current authorization.
@@ -99,6 +101,22 @@ class NetbirdIngressTests(unittest.TestCase):
         fix.reconcile(run, config)
         self.assertEqual(len([r for r in run.forward if fix.owned(r)]), 1)
         self.assertIn('100.100.1.1', [d for a, d in run.calls if a[:3] == ('nft', '-f', '-')][-1])
+
+    def test_preceding_native_firewall_rules_keep_their_precedence(self):
+        run = FakeRunner()
+        deny = {'handle': 33, 'comment': 'native-policy-denial', 'expr': [{'drop': None}]}
+        run.forward.insert(0, deny)
+        config = fix.validate('wt0', [80])
+        fix.reconcile(run, config)
+        self.assertEqual(run.forward[0], deny)
+        self.assertTrue(fix.owned(run.forward[1]))
+        self.assertEqual(run.forward[2], guard())
+        later = {'handle': 34, 'comment': 'new-native-policy', 'expr': [{'drop': None}]}
+        run.forward.insert(2, later)
+        fix.reconcile(run, config)
+        self.assertEqual(run.forward[:2], [deny, later])
+        self.assertTrue(fix.owned(run.forward[2]))
+        self.assertEqual(run.forward[3], guard())
 
     def test_unknown_netbird_semantics_remove_only_managed_rules(self):
         run = FakeRunner()

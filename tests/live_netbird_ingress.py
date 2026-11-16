@@ -117,6 +117,14 @@ add rule ip netbird fixture_mark_preserved iifname "wt0" meta mark 0x0002fd20 co
     assert not reachable(), 'Fixture must reproduce the mark-collision failure first.'
     assert fix.reconcile(run, config) == 'active'
     assert reachable() and reachable(443), 'Authorized ingress must become reachable.'
+    native_guard = fix.authorization_guard(fix.rules(run, fix.CHAIN))
+    nft(f'insert rule ip netbird {fix.CHAIN} position {native_guard["handle"]} ip saddr 100.100.0.2 ct original proto-dst 80 counter drop comment "native-policy-denial"\n')
+    fix.reconcile(run, config)
+    assert not reachable(), 'Native policy rules before the authorization guard must retain precedence.'
+    denial = next(r for r in fix.rules(run, fix.CHAIN) if r.get('comment') == 'native-policy-denial')
+    nft(f'delete rule ip netbird {fix.CHAIN} handle {denial["handle"]}\n')
+    assert reachable()
+
     assert not reachable(8080), 'Other DNATed ports must remain outside the workaround.'
     nft('delete element ip netbird allowed_ports {443}\n')
     assert not reachable(443), 'A port excluded by NetBird policy must stay blocked.'

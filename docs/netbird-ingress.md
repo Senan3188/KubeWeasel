@@ -11,6 +11,7 @@ Some NetBird/K3s combinations reject VPN traffic to ingress while host services 
 - Permits only DNATed TCP connections originally addressed to that server's NetBird IP and the configured ingress ports (80 and 443 by default).
 - Continues to require NetBird's authorization mark. Other devices work only when their current NetBird policy permits that connection. Source and port revocations continue to apply.
 - Ignores only kube-router's `0x10000`/`0x20000` bits and kube-proxy's `0x4000` bit when recognizing the mark. It never changes those bits, so Kubernetes policy verdicts and masquerading remain intact.
+- Inserts the scoped exception immediately before NetBird’s existing authorization guard, retaining any earlier native policy decisions.
 - Changes only comment-marked helper rules in NetBird's forwarding chain. It does not disable NetBird filtering, change access policies, restart NetBird/K3s, or save/restore the complete dynamic firewall.
 
 ## Install on each Ubuntu ingress node

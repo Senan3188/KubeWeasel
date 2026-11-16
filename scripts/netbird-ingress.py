@@ -82,23 +82,27 @@ def numeric(value):
         return None
 
 
-def compatible(forward, prerouting):
-    """Recognize the observed NetBird authorization contract; fail closed otherwise."""
-    if forward is None or prerouting is None:
-        return False
-    guard = False
-    for rule in forward:
+def authorization_guard(forward):
+    guards = []
+    for rule in forward or []:
         expressions = [e for e in rule.get('expr', []) if 'counter' not in e]
         if len(expressions) != 2 or 'accept' not in expressions[-1]:
             continue
         match = expressions[0].get('match', {})
         if (match.get('op') == '==' and match.get('left') == {'meta': {'key': 'mark'}}
                 and numeric(match.get('right')) == AUTH_MARK):
-            guard = True
+            guards.append(rule)
+    return guards[0] if len(guards) == 1 else None
+
+
+def compatible(forward, prerouting):
+    """Recognize the observed NetBird authorization contract; fail closed otherwise."""
+    if forward is None or prerouting is None:
+        return False
     setter = any(e.get('mangle', {}).get('key') == {'meta': {'key': 'mark'}}
                  and numeric(e.get('mangle', {}).get('value')) == AUTH_MARK
                  for rule in prerouting for e in rule.get('expr', []))
-    return guard and setter
+    return authorization_guard(forward) is not None and setter
 
 
 def comment_for(config, address):
@@ -106,10 +110,12 @@ def comment_for(config, address):
     return PREFIX + hashlib.sha256(scope.encode()).hexdigest()[:16]
 
 
-def rule_text(config, address):
+def rule_text(config, address, guard_handle):
+    if type(guard_handle) is not int or guard_handle <= 0:
+        raise Failure("Cannot safely locate the NetBird authorization rule.")
     ports = ', '.join(str(p) for p in config['ports'])
     port_set = str(config['ports'][0]) if len(config['ports']) == 1 else '{ ' + ports + ' }'
-    return (f'insert rule ip netbird {CHAIN} iifname "{config["interface"]}" '
+    return (f'insert rule ip netbird {CHAIN} position {guard_handle} iifname "{config["interface"]}" '
             f'ct status dnat ct original ip daddr {address} '
             f'meta l4proto tcp ct original proto-dst {port_set} '
             f'meta mark and 0x{MASK:08x} == 0x{EXPECTED:08x} '
@@ -145,12 +151,14 @@ def reconcile(run, config):
         if ours:
             run('nft', '-f', '-', data='\n'.join(deletes(ours)) + '\n')
         raise
+    guard = authorization_guard(current)
     expected_comment = comment_for(config, address)
     legacy = [r for r in current if r.get('comment') == 'kubeweasel-http80']
-    if len(ours) == 1 and ours[0].get('comment') == expected_comment and not legacy:
+    if (len(ours) == 1 and ours[0].get('comment') == expected_comment and not legacy
+            and current.index(ours[0]) + 1 == current.index(guard)):
         return 'active'
     # One atomic batch: keep all unrelated rules and replace only our exceptions.
-    commands = deletes(ours + legacy) + [rule_text(config, address)]
+    commands = deletes(ours + legacy) + [rule_text(config, address, guard['handle'])]
     batch = '\n'.join(commands) + '\n'
     run('nft', '--check', '-f', '-', data=batch)
     run('nft', '-f', '-', data=batch)
