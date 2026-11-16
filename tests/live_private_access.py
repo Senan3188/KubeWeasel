@@ -63,6 +63,24 @@ def api(path, body=None, extra=None, expected=200, method=None):
     return json.load(response)
 
 
+
+def wait_for_entrypoint():
+    # Pod readiness precedes kube-proxy/EndpointSlice convergence on other nodes.
+    # Poll a safe GET through the actual gateway before sending login mutations.
+    for _ in range(60):
+        try:
+            response = opener.open(urllib.request.Request(base + '/healthz', headers={'Host': host}), timeout=6)
+            assert response.status == 200 and response.read() == b'ok'
+            return
+        except urllib.error.HTTPError as error:
+            if error.code not in (502, 503, 504):
+                raise
+        except OSError:
+            pass
+        time.sleep(.5)
+    raise RuntimeError('Direct entry point did not recover after rollout')
+
+
 def login():
     global csrf
     csrf = api('/api/auth/login', {'email': EMAIL, 'password': PASSWORD})['csrf']
@@ -122,6 +140,7 @@ try:
     kube('rollout', 'status', 'deployment/kubeweasel-access', '--timeout=3m')
     kube('rollout', 'restart', 'deployment/kubeweasel')
     kube('rollout', 'status', 'deployment/kubeweasel', '--timeout=3m')
+    wait_for_entrypoint()
     login()
     print('Direct login, guards and independent restarts passed.', flush=True)
     installer('uninstall')
