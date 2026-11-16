@@ -54,7 +54,7 @@ def address_client(address):
 def reachable(port=80):
     code = '''import urllib.request
 try:
- r=urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://100.73.28.50:PORT/',timeout=.8)
+ r=urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://100.100.0.1:PORT/',timeout=.8)
  assert r.status==200 and r.read()==b'ok'
 except Exception:raise SystemExit(1)
 '''.replace('PORT', str(port))
@@ -68,11 +68,11 @@ try:
     command('ip', 'link', 'set', 'lo', 'up')
     command('ip', 'link', 'add', 'wt0', 'type', 'veth', 'peer', 'name', 'client0')
     command('ip', 'link', 'set', 'client0', 'netns', str(client))
-    command('ip', 'addr', 'add', '100.73.28.50/16', 'dev', 'wt0')
+    command('ip', 'addr', 'add', '100.100.0.1/16', 'dev', 'wt0')
     command('ip', 'link', 'set', 'wt0', 'up')
     inside(client, 'ip', 'link', 'set', 'lo', 'up')
     inside(client, 'ip', 'link', 'set', 'client0', 'up')
-    address_client('100.73.120.2')
+    address_client('100.100.0.2')
     command('ip', 'link', 'add', 'cni0', 'type', 'veth', 'peer', 'name', 'pod0')
     command('ip', 'link', 'set', 'pod0', 'netns', str(pod))
     command('ip', 'addr', 'add', '10.42.0.1/24', 'dev', 'cni0')
@@ -99,12 +99,12 @@ HTTPServer(('0.0.0.0',3000),Handler).serve_forever()
     else:
         raise RuntimeError('Disposable HTTP server did not start.')
     nft('''add table ip netbird
-add set ip netbird allowed_peers { type ipv4_addr; elements = { 100.73.120.2, 100.73.120.3 }; }
+add set ip netbird allowed_peers { type ipv4_addr; elements = { 100.100.0.2, 100.100.0.3 }; }
 add set ip netbird allowed_ports { type inet_service; elements = {80,443,8080}; }
 add chain ip netbird netbird-mangle-prerouting { type filter hook prerouting priority mangle; policy accept; }
 add rule ip netbird netbird-mangle-prerouting iifname "wt0" ip saddr @allowed_peers tcp dport @allowed_ports fib daddr type local meta mark set 0x0001bd20
 add chain ip netbird fixture_nat { type nat hook prerouting priority dstnat; policy accept; }
-add rule ip netbird fixture_nat iifname "wt0" ip daddr 100.73.28.50 tcp dport {80,443,8080} dnat to 10.42.0.2:3000
+add rule ip netbird fixture_nat iifname "wt0" ip daddr 100.100.0.1 tcp dport {80,443,8080} dnat to 10.42.0.2:3000
 add chain ip netbird fixture_kube_mark { type filter hook forward priority -10; policy accept; }
 add rule ip netbird fixture_kube_mark iifname "wt0" ct status dnat meta mark set meta mark and 0xfffeffff or 0x00024000
 add chain ip netbird netbird-acl-forward-filter { type filter hook forward priority filter; policy accept; }
@@ -129,14 +129,14 @@ add rule ip netbird fixture_mark_preserved iifname "wt0" meta mark 0x0002fd20 co
     assert [r['handle'] for r in fix.rules(run, fix.CHAIN) if fix.owned(r)] == [handle]
     observed = fix.rules(run, 'fixture_mark_preserved')
     assert sum(e['counter']['packets'] for r in observed for e in r['expr'] if 'counter' in e) > 0
-    address_client('100.73.120.3')
+    address_client('100.100.0.3')
     assert reachable(), 'A second authorized device must work without a per-device exception.'
-    address_client('100.73.120.4')
+    address_client('100.100.0.4')
     assert not reachable(), 'Unknown peers must remain blocked.'
-    address_client('100.73.120.2')
-    nft('delete element ip netbird allowed_peers {100.73.120.2}\n')
+    address_client('100.100.0.2')
+    nft('delete element ip netbird allowed_peers {100.100.0.2}\n')
     assert not reachable(), 'Policy revocation must still take effect.'
-    nft('add element ip netbird allowed_peers {100.73.120.2}\n')
+    nft('add element ip netbird allowed_peers {100.100.0.2}\n')
     assert reachable()
     nft(f'delete rule ip netbird {fix.CHAIN} handle {handle}\n')
     assert not reachable(), 'Removing the exception must reproduce the failure.'

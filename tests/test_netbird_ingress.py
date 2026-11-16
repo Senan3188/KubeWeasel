@@ -28,7 +28,7 @@ class FakeRunner:
     def __init__(self):
         self.forward = [guard(), {'handle': 2, 'expr': [{'drop': None}]}]
         self.pre = [setter()]
-        self.address = '100.73.28.50'
+        self.address = '100.100.0.1'
         self.calls = []
         self.counter = 100
         self.absent = False
@@ -64,8 +64,8 @@ class FakeRunner:
 class NetbirdIngressTests(unittest.TestCase):
     def test_scope_preserves_authorization_marks_and_kubernetes_bits(self):
         config = fix.validate('wt0', [443, 80, 80])
-        rule = fix.rule_text(config, '100.73.28.50')
-        for text in ('iifname "wt0"', 'ct status dnat', 'ct original ip daddr 100.73.28.50', 'meta l4proto tcp', 'ct original proto-dst { 80, 443 }', 'meta mark and 0xfffcbfff == 0x0000bd20'):
+        rule = fix.rule_text(config, '100.100.0.1')
+        for text in ('iifname "wt0"', 'ct status dnat', 'ct original ip daddr 100.100.0.1', 'meta l4proto tcp', 'ct original proto-dst { 80, 443 }', 'meta mark and 0xfffcbfff == 0x0000bd20'):
             self.assertIn(text, rule)
         self.assertNotIn('ip saddr', rule)  # Membership comes from NetBird's current authorization.
         self.assertNotIn('mark set', rule)
@@ -73,7 +73,7 @@ class NetbirdIngressTests(unittest.TestCase):
             self.assertEqual(mark & fix.MASK, fix.EXPECTED)
         for mark in (0, 0x10000, 0x20000, 0x1bd10, 0x1bd11, 0x1bd21, 0x1bd22):
             self.assertNotEqual(mark & fix.MASK, fix.EXPECTED)
-        self.assertNotEqual(fix.comment_for(config, '100.73.28.50'), fix.comment_for(config, '100.73.100.200'))
+        self.assertNotEqual(fix.comment_for(config, '100.100.0.1'), fix.comment_for(config, '100.100.1.1'))
 
     def test_idempotence_recovery_and_atomic_legacy_replacement(self):
         run = FakeRunner()
@@ -95,10 +95,10 @@ class NetbirdIngressTests(unittest.TestCase):
         run.forward = original  # NetBird reload removes the helper's rule.
         fix.reconcile(run, config)
         self.assertEqual(len([r for r in run.forward if fix.owned(r)]), 1)
-        run.address = '100.73.100.200'
+        run.address = '100.100.1.1'
         fix.reconcile(run, config)
         self.assertEqual(len([r for r in run.forward if fix.owned(r)]), 1)
-        self.assertIn('100.73.100.200', [d for a, d in run.calls if a[:3] == ('nft', '-f', '-')][-1])
+        self.assertIn('100.100.1.1', [d for a, d in run.calls if a[:3] == ('nft', '-f', '-')][-1])
 
     def test_unknown_netbird_semantics_remove_only_managed_rules(self):
         run = FakeRunner()
