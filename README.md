@@ -401,3 +401,7 @@ If the app works from the Ubuntu server but VPN clients time out on ingress port
 ### Application connections and secrets (v0.5.0)
 
 Projects can define named PostgreSQL, MySQL, Redis, Kafka and custom connections backed by Kubernetes Secrets. Attach several connections to one app, share them with selected apps, and map keys to your backend’s environment variable names. Saved values stay hidden. See [connection setup, rotation and permission changes](docs/connections.md). Included in v0.5.0. Helm upgrades apply the new local namespace permissions; existing remote connections need the updated namespace Role. Secret permissions cover the entire application namespace, not only KubeWeasel labels.
+
+## License
+
+KubeWeasel is open-source software licensed under the [Apache License 2.0](LICENSE). You may use, modify, and redistribute it, including commercially, subject to the license terms. Keep the required license and attribution notices and identify modified files when redistributing changes. The software is provided without warranty. Dependencies retain their own licenses.

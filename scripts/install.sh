@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # KubeWeasel installer: no sudo, no namespace deletion, no credential collection.
 set -euo pipefail
 VERSION=0.5.0
